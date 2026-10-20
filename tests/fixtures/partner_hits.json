@@ -1,0 +1,101 @@
+[
+  {
+    "distanceKm": null,
+    "distanceMiles": null,
+    "id": "b788f3f1-5f7e-42c7-bd5c-6880cb3133e3",
+    "title": "Swedish or Deep Tissue Massage",
+    "shortDescription": "A relaxing massage.",
+    "description": "A relaxing massage at a day spa.",
+    "status": "active",
+    "availabilityRequired": false,
+    "categoryLabels": ["Day Spas", "Swedish Massage", "Deep Tissue Massage"],
+    "media": [],
+    "locations": [
+      {"id": "loc-1", "name": "Royal Day Spa", "street": "1 Main St", "city": "Chicago", "state": "Illinois", "postalCode": "60605", "country": "US", "latitude": null, "longitude": null}
+    ],
+    "options": [
+      {"id": "opt-a1", "title": "60-Minute Massage", "isDefault": true, "active": true, "minUnits": 1, "maxUnits": 2,
+       "price": {"retail": 4080, "original": 8000, "currency": "USD", "currencyPrecision": 2}, "promotion": null, "selections": []},
+      {"id": "opt-a2", "title": "90-Minute Massage", "isDefault": false, "active": true, "minUnits": 1, "maxUnits": null,
+       "price": {"retail": 5805, "original": 12000, "currency": "USD", "currencyPrecision": 2}, "promotion": null, "selections": []},
+      {"id": "opt-a3", "title": "Retired Package", "isDefault": false, "active": false, "minUnits": 1, "maxUnits": 2,
+       "price": {"retail": 9900, "original": 15000, "currency": "USD", "currencyPrecision": 2}, "promotion": null, "selections": []}
+    ]
+  },
+  {
+    "distanceKm": null,
+    "distanceMiles": null,
+    "id": "699cd8cd-69a5-45f4-820f-e92f7b806cf2",
+    "title": "$100 Dining Credit",
+    "shortDescription": "Dining credit at a cafe.",
+    "description": "Dining credit at a cafe.",
+    "status": "active",
+    "availabilityRequired": false,
+    "categoryLabels": ["Restaurants", "Cafes"],
+    "media": [],
+    "locations": [
+      {"id": "loc-2", "name": null, "street": "22 Oak Ave", "city": "Chicago", "state": "Illinois", "postalCode": "60601", "country": "US", "latitude": null, "longitude": null}
+    ],
+    "options": [
+      {"id": "opt-b1", "title": "$100 Credit", "isDefault": true, "active": null, "minUnits": 1, "maxUnits": 3,
+       "price": {"retail": 5000, "original": 10000, "currency": "USD", "currencyPrecision": 2}, "promotion": null, "selections": []},
+      {"id": "opt-b2", "title": "$50 Credit", "isDefault": false, "active": true, "minUnits": 2, "maxUnits": null,
+       "price": {"retail": 2500, "original": 5000, "currency": "USD", "currencyPrecision": 2}, "promotion": null, "selections": []}
+    ]
+  },
+  {
+    "distanceKm": null,
+    "distanceMiles": null,
+    "id": "98b3339b-c136-41de-b530-cab0478fc026",
+    "title": "Timed Entry Escape Room",
+    "shortDescription": "Needs a time slot.",
+    "description": "Needs a time-slot booking.",
+    "status": "active",
+    "availabilityRequired": true,
+    "categoryLabels": ["Escape Games"],
+    "media": [],
+    "locations": [
+      {"id": "loc-3", "name": "Locked In", "street": "3 Pine St", "city": "New York", "state": "New York", "postalCode": "10001", "country": "US", "latitude": null, "longitude": null}
+    ],
+    "options": [
+      {"id": "opt-c1", "title": "Up to 6 Players", "isDefault": true, "active": true, "minUnits": 1, "maxUnits": 1,
+       "price": {"retail": 12000, "original": 24000, "currency": "USD", "currencyPrecision": 2}, "promotion": null, "selections": []}
+    ]
+  },
+  {
+    "distanceKm": null,
+    "distanceMiles": null,
+    "id": "caadee2e-78ad-4f34-9876-0dc28a48151e",
+    "title": "Yoga Class Pack",
+    "shortDescription": "Yoga classes.",
+    "description": "Yoga classes.",
+    "status": "active",
+    "availabilityRequired": false,
+    "categoryLabels": ["Yoga Classes"],
+    "media": [],
+    "locations": [],
+    "options": [
+      {"id": "opt-d1", "title": "5 Classes", "isDefault": true, "active": true, "minUnits": 1, "maxUnits": 1,
+       "price": {"retail": 4500, "original": 14500, "currency": "USD", "currencyPrecision": 2}, "promotion": null, "selections": []}
+    ]
+  },
+  {
+    "distanceKm": null,
+    "distanceMiles": null,
+    "id": "49be40f3-5642-44da-bc8d-a7bf7c320495",
+    "title": "Sold Out Brewery Tour",
+    "shortDescription": "Gone.",
+    "description": "Gone.",
+    "status": "sold_out",
+    "availabilityRequired": false,
+    "categoryLabels": ["Tours"],
+    "media": [],
+    "locations": [
+      {"id": "loc-5", "name": "Brewhouse", "street": "5 Elm St", "city": "New York", "state": "New York", "postalCode": "10002", "country": "US", "latitude": null, "longitude": null}
+    ],
+    "options": [
+      {"id": "opt-e1", "title": "Tour for One", "isDefault": true, "active": true, "minUnits": 1, "maxUnits": 4,
+       "price": null, "promotion": null, "selections": []}
+    ]
+  }
+]
