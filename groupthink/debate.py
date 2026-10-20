@@ -17,7 +17,7 @@ from datetime import date
 from typing import Literal
 
 from . import lines as L
-from .fit import Member, Ranked, RankResult
+from .fit import TOP_N, Member, Ranked, RankResult
 from .money import fmt
 
 FACT_PRIORITY = ["over_budget", "limit_per_person", "appointment", "may_cover_more",
@@ -81,10 +81,12 @@ def member_facts(member: Member, r: Ranked, idx: int, best_discount_idx: int | N
         held.add("limit_per_person")
     if f.appointment is True:
         held.add("appointment")
-    if "may_cover_more" in r.warnings:
+    if "may_cover_more" in r.warnings and r.quantity > 1:   # "check before buying 1" is no argument
         held.add("may_cover_more")
     if verdict.likes_matched:
         held.add("matches_like")
+    if "over_budget" in held:
+        held.discard("matches_like")     # "over my budget" then "I am in" about the same offer contradicts
     if best_discount_idx is not None and idx == best_discount_idx:
         held.add("best_discount")
     exp = _parse_date(r.candidate.voucher_expires)
@@ -138,7 +140,9 @@ def _referee_line(rng, used, result: RankResult) -> tuple[Line, str]:
     if result.top:
         top = result.top[0]
         pool = L.REFEREE_PICK_ONE if len(result.top) == 1 else L.REFEREE_PICK_MANY
-        t = _pick(rng, pool, used).format(title=_clean(top.candidate.title), count=len(result.top))
+        n = len(result.top)
+        fit = f"At least {n} options" if n >= TOP_N else f"{n} options"
+        t = _pick(rng, pool, used).format(title=_clean(top.candidate.title), fit=fit)
         return Line("Referee", "referee", t, top.candidate.product_id), "referee_pick"
     reason = result.emptied_by
     if reason is None and not result.shortlist:

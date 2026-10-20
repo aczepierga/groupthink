@@ -17,18 +17,18 @@ ADVOCATE = {
             '"{title}" is over my budget. Hard pass unless the price drops.',
             'Too pricey for me: "{title}". I need something cheaper.',
             'No to "{title}". It costs more than I can spend.',
-            'This is not happening on {name}\'s budget: "{title}".',
+            'This is not happening on my budget: "{title}".',
             '"{title}" costs me {over} more than my {cap} cap. Pass.',
             'My cap is {cap}. "{title}" busts it by {over}.',
             '{cap} is my limit and "{title}" is {over} over it. No.',
         ],
         "cheerful": [
-            'I like the vibe of "{title}", but it stretches my budget too far!',
+            'I like the vibe of "{title}", but it is over my budget!',
             '"{title}" looks fun, though it is over what I can spend. Anything cheaper?',
-            'So close with "{title}"! It is just over my budget, sadly.',
-            'Sadly "{title}" is just past what {name} can spend!',
+            'Tempting, "{title}"! It is over my budget, sadly.',
+            'Sadly "{title}" is over what I can spend!',
             'Love "{title}", but my cap is {cap} and it runs {over} over. Can we trim it?',
-            'So close! "{title}" is {over} above my {cap} budget.',
+            'Tempting! "{title}" is {over} above my {cap} budget.',
             'My budget tops out at {cap}, and "{title}" is {over} over that. Sad face!',
         ],
         "nerdy": [
@@ -40,10 +40,10 @@ ADVOCATE = {
             'Inequality failed: my {cap} limit is {over} short of "{title}".',
         ],
         "chill": [
-            '"{title}" is a bit more than I wanted to spend. Could we go cheaper?',
+            '"{title}" is more than I wanted to spend. Could we go cheaper?',
             'Not sure about "{title}", it is above my budget. No stress, just saying.',
             'Honestly "{title}" is past what I planned to spend. Something cheaper works for me.',
-            'Fair warning from {name}: "{title}" is over budget.',
+            'Fair warning: "{title}" is over my budget.',
             'My limit is {cap}, and "{title}" is {over} over. Maybe something cheaper?',
             '"{title}" runs {over} past my {cap}. I would rather skip it.',
             'Eh, {cap} is where I stop, and "{title}" goes {over} past that.',
@@ -69,13 +69,13 @@ ADVOCATE = {
         "chill": [
             'Small snag with "{title}": limit {limit} per person and we need {qty}. A few checkouts then.',
             '"{title}" says limit {limit} per person. We need {qty}, so we would buy it in pieces.',
-            'Just noting that "{title}" caps at {limit} per person and we want {qty}. Doable, a bit fiddly.',
+            'Just noting that "{title}" caps at {limit} per person and we want {qty}. Doable, just fiddly.',
         ],
     },
     # Fine print says an appointment is required.
     "appointment": {
         "blunt": [
-            '"{title}" needs an appointment with the business after we buy. Someone has to call.',
+            '"{title}" needs an appointment with the business after we buy. Someone has to set it up.',
             'Fine print on "{title}" says appointment required. We schedule it ourselves.',
             'Appointment required for "{title}". The voucher does not set a time for us.',
         ],
@@ -91,7 +91,7 @@ ADVOCATE = {
         ],
         "chill": [
             '"{title}" needs an appointment, so we sort out a time with the business after buying.',
-            'Just so we know, "{title}" says appointment required. We call them after we buy.',
+            'Just so we know, "{title}" says appointment required. We contact them after we buy.',
             'With "{title}" we arrange the actual time later, since it needs an appointment.',
         ],
     },
@@ -99,23 +99,23 @@ ADVOCATE = {
     "may_cover_more": {
         "blunt": [
             'The listing for "{title}" does not pin down how many people one voucher covers. Check before buying {qty}.',
-            '"{title}" may cover more or fewer people than our group. Do not buy {qty} blind.',
+            '"{title}" may cover more people per voucher than we assume. Do not buy {qty} blind.',
             'Unclear party size on "{title}". We could end up buying more than we need.',
         ],
         "cheerful": [
             'Good news and a question on "{title}": one voucher might cover more of us than expected! Worth checking.',
             '"{title}" does not say exactly how many people a voucher covers. Let us check before we buy {qty}!',
-            'Maybe we need fewer vouchers for "{title}", since the party size is open ended. Worth a look!',
+            'Is {qty} the right number of vouchers for "{title}"? The party size is open ended. Worth a look!',
         ],
         "nerdy": [
             'The party size on "{title}" is open ended, so the right quantity is not certain. {qty} is only an estimate.',
-            'For "{title}" the people per voucher is a bound, not an exact number. Verify before buying {qty}.',
-            'Uncertainty on "{title}": one voucher may cover more or fewer than assumed. Our estimate is {qty}.',
+            'The listing for "{title}" gives no exact number of people per voucher. Verify before buying {qty}.',
+            'Uncertainty on "{title}": the people per voucher is open ended, so {qty} is only an estimate.',
         ],
         "chill": [
-            '"{title}" is vague on how many people a voucher covers. Might need fewer than {qty}, worth checking.',
+            '"{title}" is vague on how many people a voucher covers. Worth checking before buying {qty}.',
             'Not sure how many each voucher covers on "{title}". We should look before buying {qty}.',
-            'The party size for "{title}" is loose, so {qty} vouchers might be too many.',
+            'The party size for "{title}" is loose, so {qty} vouchers is only a guess.',
         ],
     },
     # Something on this member's own wish list matches the offer.
@@ -219,14 +219,14 @@ SCOUT_NONE = [
     "My live search came back with no offers to argue over this time.",
 ]
 SCOUT_ONE = [
-    "I searched live and found one real offer worth arguing about: {titles}.",
+    "I searched live and put one real offer on the shortlist: {titles}.",
     "One real offer made the shortlist: {titles}.",
-    "Here is the one offer I found for us: {titles}.",
+    "Here is the one offer on the shortlist: {titles}.",
 ]
 SCOUT_MANY = [
-    "I searched live and found {count} real offers worth arguing about: {titles}.",
+    "I searched live and put {count} real offers on the shortlist: {titles}.",
     "Shortlist time! {count} real offers made the cut: {titles}.",
-    "Here is what I found, {count} real offers: {titles}.",
+    "Here is the shortlist, {count} real offers: {titles}.",
 ]
 # Scout skip line: counts only, never which member or which hard no.
 SKIP_ZERO = [
@@ -247,14 +247,14 @@ SKIP_MANY = [
 
 # Referee. The pick is code's choice (RankResult.top[0]); the referee only announces it.
 REFEREE_PICK_ONE = [
-    'My pick: "{title}". It fits every budget in the group. Host, it is your call.',
+    'My pick: "{title}". It fits every budget in the group. Host, it is your decision.',
     'I land on "{title}". It works for everyone\'s budget. Over to the host.',
     'Verdict: "{title}". Every budget in the group can handle it. Host, take a look.',
 ]
 REFEREE_PICK_MANY = [
-    'My pick: "{title}". {count} options fit every budget, so the host can choose another.',
-    'I land on "{title}". It works for everyone\'s budget, and {count} options do, so the host decides.',
-    'Verdict: "{title}" first. {count} options fit everyone\'s budget, host, you pick.',
+    'My pick: "{title}". {fit} fit every budget, so the host can choose another.',
+    'I land on "{title}". It works for everyone\'s budget. {fit} do, so the host decides.',
+    'Verdict: "{title}" first. {fit} fit everyone\'s budget, host, you pick.',
 ]
 # emptied_by: name the constraint in plain words and say the host can relax it. Never auto-relax.
 REFEREE_EMPTY = {
@@ -264,24 +264,24 @@ REFEREE_EMPTY = {
         "Everyone's budget together rules out all of these. The host can relax it, then I rerun.",
     ],
     "hard_no": [
-        "Every offer clashed with a hard no. The host can relax the hard no's and I will rerun.",
-        "All the offers I found ran into someone's hard no. The host can relax them and I go again.",
-        "Hard no's ruled out everything on the table. The host can relax them, then I rerun.",
+        "Hard no's ruled out most of what I found, and nothing is left. The host can relax them and I will rerun.",
+        "Most of what I found ran into a hard no, and nothing is left. The host can relax them and I go again.",
+        "Hard no's cleared out most of the list and nothing is left. The host can relax them, then I rerun.",
     ],
     "kids_21": [
-        "Every offer has an age limit that does not work for this group. The host can relax that and I rerun.",
-        "All the offers have an age limit that rules out the group. The host can relax it and I go again.",
-        "An age limit ruled out everything I found. The host can relax it, then I rerun.",
+        "An age limit ruled out most of what I found, and nothing is left. The host can relax that and I rerun.",
+        "Most of what I found has an age limit that rules out the group. The host can relax it and I go again.",
+        "Age limits cleared out most of the list and nothing is left. The host can relax them, then I rerun.",
     ],
     "quantity": [
-        "Nothing has enough vouchers available for the whole group. The host can relax that and I rerun.",
-        "No offer has enough vouchers for the whole group. The host can relax that need and I go again.",
-        "No offer has enough vouchers left for everyone. The host can relax it, then I rerun.",
+        "Most offers lack enough vouchers for the group and none are left. The host can relax that and I rerun.",
+        "Too few vouchers are available on most offers, and none are left. The host can relax that, then I rerun.",
+        "Most offers do not have enough vouchers for everyone, so none are left. The host can relax it and I rerun.",
     ],
     "other": [
         "Nothing fit the group's needs this time. The host can relax a constraint and I will rerun.",
         "No offer made it through the group's needs. The host can relax something and I go again.",
-        "The group's needs ruled out everything I found. The host can relax one, then I rerun.",
+        "The group's needs ruled out most of what I found, and nothing is left. The host can relax one, then I rerun.",
     ],
 }
 REFEREE_NONE = [

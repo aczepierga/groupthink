@@ -10,7 +10,7 @@ from groupthink.money import fmt
 
 TODAY = date(2026, 10, 20)
 BANNED = ["reservation", "reserve", "booked", "rating", "review", "popular", "best-selling",
-          "top-rated", "bestseller", "sold", "—", "–"]
+          "top-rated", "bestseller", "sold", "just over", "so close", "a bit", "call", "—", "–"]
 
 
 def cand(pid="p1", oid="o1", title="Clay Wheel Night", price=3000, original=None, party=1,
@@ -302,7 +302,7 @@ def test_referee_pick_is_top():
 
 def test_referee_emptied_by_names_constraint_and_offers_relax():
     m = [member("m0", "Ann")]
-    cases = {"budget": "budget", "hard_no:bar": "hard no", "kids_21": "age", "quantity": "enough"}
+    cases = {"budget": "budget", "hard_no:bar": "hard no", "kids_21": "age", "quantity": "voucher"}
     for reason, needle in cases.items():
         res = rank([], m)
         res.emptied_by = reason
@@ -358,3 +358,47 @@ def test_personality_by_member_index():
 def _matches(template, text):
     pat = re.sub(r"\\\{\w+\\\}", ".+", re.escape(template))
     return re.fullmatch(pat, text) is not None
+
+
+def test_no_like_line_after_over_budget_same_option():
+    # Ann is over budget on the only offer AND likes it: she may say "over budget", never "I am in".
+    m = [member("m0", "Ann", cap=500, likes=["clay"]), member("m1", "Bo")]
+    res = rank([cand(title="Clay Wheel Night", price=2000, original=2500)], m)
+    assert res.shortlist[0].verdicts[0].likes_matched and not res.shortlist[0].verdicts[0].fits_budget
+    for seed in range(200):
+        for rnd in run_debate_traced(res, m, seed, today=TODAY):
+            for ln, code in rnd:
+                if ln.speaker == "Ann":
+                    assert code != "matches_like", (seed, ln.text)
+
+
+def test_no_self_reference_by_name():
+    members, res = chicago()
+    scen = [(members, res)] + [scenario(c) for c in ALL_CODES]
+    for ms, r in scen:
+        for seed in range(100):
+            for ln in run_debate(r, ms, seed, today=TODAY):
+                if ln.kind == "advocate":
+                    assert not re.search(r"\b" + re.escape(ln.speaker) + r"\b", ln.text), (seed, ln.text)
+
+
+def test_may_cover_more_skipped_when_one_voucher():
+    m = [member("m0", "Ann")]
+    res = rank([cand(party=2, bound="up_to")], m)
+    assert res.shortlist[0].quantity == 1
+    codes = [c for rnd in run_debate_traced(res, m, 1, today=TODAY) for _, c in rnd]
+    assert "may_cover_more" not in codes
+
+
+def test_referee_at_least_when_top_is_full():
+    ms = [member("m0", "Ann")]
+    cands = [cand(f"p{i}", title=f"Offer {i}", price=1000 + i) for i in range(5)]
+    res = rank(cands, ms)
+    assert len(res.top) == 3
+    for seed in range(10):
+        assert "At least 3 options" in run_debate(res, ms, seed, today=TODAY)[-1].text
+    res2 = rank(cands[:2], ms)
+    assert len(res2.top) == 2
+    for seed in range(10):
+        t = run_debate(res2, ms, seed, today=TODAY)[-1].text
+        assert "2 options" in t and "At least" not in t
