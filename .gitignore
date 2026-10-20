@@ -1,0 +1,7 @@
+.env
+runs/
+*.db
+__pycache__/
+probe_bodies/
+.superpowers/
+.venv/
