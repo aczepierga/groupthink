@@ -88,6 +88,20 @@ def test_from_env_prefers_kv_names_then_upstash(monkeypatch):
     assert Kv.from_env() is None
 
 
+def test_list_and_hash_commands():
+    kv, t = _kv([(200, {"result": 1}), (200, {"result": ["a", "b"]}), (200, {"result": None}),
+                 (200, {"result": 1}), (200, {"result": ["f1", "v1", "f2", "v2"]}), (200, {"result": []})])
+    assert kv.rpush("l", "a") == 1
+    assert kv.lrange("l", 0, -1) == ["a", "b"]
+    assert kv.lrange("l") == []          # missing list comes back null
+    assert kv.hset("h", "f1", "v1") == 1
+    assert kv.hgetall("h") == {"f1": "v1", "f2": "v2"}
+    assert kv.hgetall("none") == {}
+    assert [c["command"] for c in t.calls] == [
+        ["RPUSH", "l", "a"], ["LRANGE", "l", 0, -1], ["LRANGE", "l", 0, -1],
+        ["HSET", "h", "f1", "v1"], ["HGETALL", "h"], ["HGETALL", "none"]]
+
+
 def test_repr_hides_token():
     kv = Kv(URL, TOKEN, transport=FakeTransport([]))
     assert TOKEN not in repr(kv) and TOKEN not in str(kv)

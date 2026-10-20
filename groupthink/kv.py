@@ -77,3 +77,17 @@ class Kv:
 
     def delete(self, key):
         return self._command("DEL", key)
+
+    def rpush(self, key, value):
+        return self._command("RPUSH", key, value)
+
+    def lrange(self, key, start=0, stop=-1):
+        return self._command("LRANGE", key, int(start), int(stop)) or []
+
+    def hset(self, key, field, value):
+        return self._command("HSET", key, field, value)
+
+    def hgetall(self, key):
+        """Upstash returns a flat [field, value, ...] list; fold it to a dict."""
+        flat = self._command("HGETALL", key) or []
+        return dict(zip(flat[0::2], flat[1::2]))
