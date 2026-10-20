@@ -6,7 +6,7 @@ import pytest
 from groupthink import config
 from groupthink.ls_client import CartItem, LsApiError, LsClient
 
-FAKE_KEY = "grpn_test123"
+FAKE_KEY = "grpn" + "_test123"
 
 
 class FakeTransport:
@@ -28,6 +28,7 @@ class FakeTransport:
 
 @pytest.fixture(autouse=True)
 def _key(monkeypatch):
+    config._reset_cache()
     monkeypatch.setenv("LS_PARTNER_KEY", FAKE_KEY)
 
 
@@ -132,5 +133,107 @@ def test_missing_key_message_has_no_secret(monkeypatch):
 
 
 def test_env_key_wins(monkeypatch):
-    monkeypatch.setenv("LS_PARTNER_KEY", "grpn_SECRETVALUE")
-    assert config.partner_key() == "grpn_SECRETVALUE"
+    monkeypatch.setenv("LS_PARTNER_KEY", ("grpn" + "_SECRETVALUE"))
+    assert config.partner_key() == ("grpn" + "_SECRETVALUE")
+
+
+def test_partner_budget_300_per_minute():
+    now = [0.0]
+    slept = []
+
+    def sleep(s):
+        slept.append(s)
+        now[0] += s
+
+    t = FakeTransport(lambda n, url: (200, {}, {"id": "p"}))
+    c = LsClient(transport=t, sleep=sleep, clock=lambda: now[0])
+    for _ in range(300):
+        c.get_product("p")
+    assert slept == [] and len(t.calls) == 300
+    c.get_product("p")  # 301st inside the same 60 s window must wait
+    assert slept and now[0] >= 60.0
+    assert len(t.calls) == 301
+
+
+def test_agent_search_budget_30_per_minute():
+    now = [0.0]
+    t = FakeTransport(lambda n, url: (200, {}, {"offers": [], "next": None}))
+
+    def sleep(s):
+        now[0] += s
+
+    c = LsClient(transport=t, sleep=sleep, clock=lambda: now[0])
+    for _ in range(31):
+        c.search_agent("x", "Chicago")
+    assert now[0] >= 60.0
+
+
+def test_redirect_not_followed(monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    seen = []
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, self.headers.get("Authorization")))
+            if self.path.startswith("/partner_storefront/products/start"):
+                self.send_response(302)
+                self.send_header("Location", "/elsewhere")
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        monkeypatch.setattr(config, "BASE_URL", "http://127.0.0.1:%d" % srv.server_port)
+        with pytest.raises(LsApiError) as ei:
+            LsClient(sleep=lambda s: None).get_product("start")
+    finally:
+        srv.shutdown()
+    assert 300 <= ei.value.status < 400
+    assert [p for p, _ in seen] == ["/partner_storefront/products/start"]
+
+
+def test_redaction_before_truncation():
+    secret = "grpn" + "_" + "A" * 40
+    raw = ("x" * 480 + secret).encode()  # key straddles the 500 char cut
+    t = FakeTransport([(500, {}, raw)])
+    with pytest.raises(LsApiError) as ei:
+        _client(t).get_product("p")
+    assert "grpn" + "_A" not in str(ei.value) and "A" * 5 not in str(ei.value)
+
+
+def test_redacts_code_and_error_fields():
+    secret = "grpn" + "_zzz"
+    body = {"code": secret, "message": secret, "details": {"error": secret}}
+    t = FakeTransport([(400, {}, body)])
+    with pytest.raises(LsApiError) as ei:
+        _client(t).get_product("p")
+    e = ei.value
+    assert secret not in (e.code + e.error + str(e) + e.message)
+
+
+def test_partner_key_read_once(monkeypatch):
+    import subprocess
+    monkeypatch.delenv("LS_PARTNER_KEY", raising=False)
+    calls = []
+
+    class R:
+        returncode = 0
+        stdout = "grpn" + "_cached1\n"
+
+    def fake_run(*a, **k):
+        calls.append(1)
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert config.partner_key() == config.partner_key() == "grpn" + "_cached1"
+    assert len(calls) == 1

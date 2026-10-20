@@ -17,8 +17,21 @@ def _keychain_read() -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+_cache = {"key": None}  # process memory only, never logged
+
+
+def _reset_cache() -> None:
+    _cache["key"] = None
+
+
 def partner_key() -> str:
-    key = os.environ.get("LS_PARTNER_KEY", "").strip() or _keychain_read()
+    key = os.environ.get("LS_PARTNER_KEY", "").strip()
+    if key:
+        return key
+    if _cache["key"]:
+        return _cache["key"]
+    key = _keychain_read()
     if not key:
         raise RuntimeError("partner key missing")
+    _cache["key"] = key
     return key

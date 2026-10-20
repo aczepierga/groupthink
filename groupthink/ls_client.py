@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 from dataclasses import dataclass
 
 from . import config
@@ -30,11 +31,21 @@ def redact(text: str) -> str:
     return SECRET_RE.sub("grpn_<redacted>", text)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would forward the Authorization header to another host; surface it instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def urllib_transport(method, url, headers, body, timeout):
-    """Returns (status, response_headers, raw_body). Never raises on HTTP errors."""
+    """Returns (status, response_headers, raw_body). Never raises on HTTP errors; never follows redirects."""
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _OPENER.open(req, timeout=timeout) as r:
             return r.status, dict(r.headers), r.read()
     except urllib.error.HTTPError as e:
         return e.code, dict(e.headers), e.read()
@@ -61,27 +72,25 @@ class LsApiError(Exception):
 
 
 class _Bucket:
-    """Token bucket, rate_per_min tokens/min, burst = rate_per_min."""
+    """Sliding-window limiter: at most `limit` calls in any 60 s window."""
 
-    def __init__(self, rate_per_min, clock, sleep):
-        self.rate = rate_per_min / 60.0
-        self.cap = float(rate_per_min)
-        self.tokens = self.cap
+    def __init__(self, limit_per_min, clock, sleep):
+        self.limit = limit_per_min
         self.clock, self.sleep = clock, sleep
-        self.last = clock()
+        self.stamps = deque()
         self.lock = threading.Lock()
 
     def take(self):
         while True:
             with self.lock:
                 now = self.clock()
-                self.tokens = min(self.cap, self.tokens + (now - self.last) * self.rate)
-                self.last = now
-                if self.tokens >= 1:
-                    self.tokens -= 1
+                while self.stamps and now - self.stamps[0] >= 60.0:
+                    self.stamps.popleft()
+                if len(self.stamps) < self.limit:
+                    self.stamps.append(now)
                     return
-                wait = (1 - self.tokens) / self.rate
-            self.sleep(wait)
+                wait = self.stamps[0] + 60.0 - now
+            self.sleep(max(wait, 0.001))
 
 
 class LsClient:
@@ -132,13 +141,13 @@ class LsClient:
 
     @staticmethod
     def _parse(raw):
-        txt = raw.decode("utf8", "replace") if raw else ""
+        txt = redact(raw.decode("utf8", "replace")) if raw else ""
         if not txt.strip():
             return None
         try:
             return json.loads(txt)
         except ValueError:
-            return redact(txt[:500])
+            return txt[:500]
 
     @staticmethod
     def _error(status, parsed):
@@ -146,9 +155,9 @@ class LsClient:
             return LsApiError(status, message=parsed if isinstance(parsed, str) else "")
         details = parsed.get("details") if isinstance(parsed.get("details"), dict) else {}
         cp = details.get("currentPrice")
-        return LsApiError(status, code=str(parsed.get("code") or ""),
+        return LsApiError(status, code=redact(str(parsed.get("code") or "")),
                           message=str(parsed.get("message") or ""),
-                          error=details.get("error"),
+                          error=redact(str(details["error"])) if details.get("error") is not None else None,
                           current_price_minor=cp if isinstance(cp, int) else None)
 
     # ---- partner ----------------------------------------------------
