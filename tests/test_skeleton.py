@@ -150,6 +150,13 @@ def test_no_inline_handlers_on_home(client):
     assert '<script src="/static/reveal.js"' in html
 
 
+def test_root_entrypoint_exports_app():
+    import main
+    from fastapi import FastAPI
+    assert isinstance(main.app, FastAPI)
+    assert main.__all__ == ["app"]
+
+
 def test_static_files_served(client):
     css = client.get("/static/style.css")
     assert css.status_code == 200
