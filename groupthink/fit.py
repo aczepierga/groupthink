@@ -147,6 +147,8 @@ def per_member_spend_minor(c: Candidate, qty: int, group_size: int) -> int:
 
 
 def _word_in(word: str, hay: list[str]) -> bool:
+    if not word or not word.strip():
+        return False
     rx = re.compile(r"(?<!\w)" + re.escape(word) + r"(?!\w)", re.IGNORECASE)
     return any(rx.search(h) for h in hay)
 

@@ -85,11 +85,20 @@ def test_fitting_options_rank_in_top_and_emptied_none():
 
 
 def test_discount_and_tie_by_lower_spend():
-    cheap = cand(pid="a", price=1000, original=2000)
-    pricey = cand(pid="b", price=2000, original=4000)
+    # equal score (same 50% discount, both fit); cheaper has the HIGHER id so only spend orders it first
+    cheap = cand(pid="z", price=1000, original=2000)
+    pricey = cand(pid="a", price=2000, original=4000)
     res = rank([pricey, cheap], group(2, cap=100000))
-    assert res.shortlist[0].candidate.product_id == "a"
+    assert res.shortlist[0].score == res.shortlist[1].score
+    assert res.shortlist[0].candidate.product_id == "z"
     assert res.shortlist[0].discount_pct == 50
+
+
+def test_spend_rounds_up_non_divisible():
+    c = cand(price=8001, party=2, bound="exactly")   # group 2 -> qty 1, 8001/2 = 4000.5
+    assert per_member_spend_minor(c, 1, 2) == 4001
+    v = rank([c], group(2, cap=4000)).shortlist[0].verdicts[0]
+    assert v.over_by_minor == 1 and v.fits_budget is False
 
 
 def test_likes_raise_score():
