@@ -20,13 +20,15 @@ MAX_QUERIES = 4
 MAX_PRODUCTS = 30
 THIN_BELOW = 5
 BASE_QUERIES = ["things to do", "dinner", "activities"]
-ADULT_TERMS = ["adult", "adults only", "thc", "cbd", "cannabis", "dispensary", "strip club", "sex",
+ADULT_TERMS = ["adults only", "adult night", "adults night", "adult entertainment", "adult store",
+               "adult shop", "adult toys", "thc", "cannabis", "dispensary", "strip club", "sex",
                "erotic", "hookah", "21+ night"]
 NEARBY = {"Chicago": ["Evanston", "Oak Park"], "Austin": ["Round Rock"],
           "New York": ["Brooklyn", "Jersey City"]}
 
-# Whole words only, with an optional plural "s" ("Adults Night" must match "adult"). "NY Strip Steak"
-# and "Essex" are not caught: "strip club" needs both words, "sex" needs a word boundary.
+# Whole words only, with an optional plural "s". Bare "adult" is not a term ("Adult Pottery Class" is a
+# legitimate grown-up class), and "cbd" is not a term (CBD massage deals are legitimate). "NY Strip
+# Steak" and "Essex" are not caught: "strip club" needs both words, "sex" needs a word boundary.
 _ADULT_RE = re.compile(r"\b(?:%s)s?\b" % "|".join(re.escape(t) for t in ADULT_TERMS), re.IGNORECASE)
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _SPACE_RE = re.compile(r"\s+")
@@ -104,7 +106,15 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
     tried, unique = [], {}
     for q in _queries(theme):
         tried.append(q)
-        for h in client.search_partner(q, city, max_price_dollars=max_price):
+        try:
+            page = client.search_partner(q, city, max_price_dollars=max_price)
+        except LsApiError as e:
+            if not unique:
+                raise                                            # nothing gathered yet: caller decides
+            log.info("partner search failed (%s) on query %d, keeping %d products", e.status,
+                     len(tried), len(unique))
+            break
+        for h in page:
             unique.setdefault(h["id"], h)                        # insertion order = Partner rank
         if len(unique) >= MAX_PRODUCTS:
             break
@@ -113,7 +123,7 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
     adult_dropped = len(unique) - len(kept)
 
     agent_details: dict[str, dict] = {}
-    if path == "A":
+    if path == "A" and any(_sellable(h) for h in kept):
         summaries = _agent_summaries(client, tried, city)
         fetched = 0
         for h in kept:
@@ -129,6 +139,8 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
                 detail = client.get_agent_offer(s["permalink"], city)
             except LsApiError as e:
                 log.info("agent read failed (%s), product stays Partner-only", e.status)
+                if e.status == 429:
+                    break                                        # budget exhausted: rest stay Partner-only
                 continue
             if isinstance(detail, dict) and confirm_match(h, detail):
                 agent_details[h["id"]] = dict(detail, permalink=detail.get("permalink") or s["permalink"])

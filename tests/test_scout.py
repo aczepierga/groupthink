@@ -163,6 +163,19 @@ def test_strip_steak_not_dropped():
     assert r.adult_dropped == 0
 
 
+def test_adult_pottery_class_kept():
+    for title, cats in [("Adult Pottery Class", ["Classes"]), ("Adult Beginner Swim Lessons", ["Swimming"])]:
+        assert is_adult(hit("x", title=title, cats=cats)) is False
+    assert is_adult(hit("y", title="Adult Entertainment Night", cats=["Nightlife"])) is True
+    assert is_adult(hit("z", title="Adults Only Cruise", cats=["Cruises"])) is True
+
+
+def test_cbd_massage_kept():
+    h = hit("cbd", title="CBD Massage", cats=["Massage", "CBD Treatments"])
+    assert is_adult(h) is False
+    assert [c.product_id for c in run(FakeClient(partner={"massage": [h]})).candidates] == ["cbd"]
+
+
 def test_adult_terms_are_whole_words():
     assert is_adult(hit("x", title="Essex Sussex Tour", cats=["Tours"])) is False
     assert is_adult(hit("y", title="Hookah Lounge Night", cats=["Lounges"])) is True
@@ -307,3 +320,38 @@ def test_adult_and_unsellable_hits_do_not_spend_detail_fetches():
 def test_unknown_path_rejected():
     with pytest.raises(ValueError):
         run(FakeClient(), path="C")
+
+
+def test_partner_error_after_first_query_keeps_results():
+    class Flaky(FakeClient):
+        def search_partner(self, q, city, max_price_dollars=None, limit=50):
+            if q != "massage":
+                raise LsApiError(503, "unavailable")
+            return super().search_partner(q, city, max_price_dollars, limit)
+    r = run(Flaky(partner={"massage": [hit("p1")]}))
+    assert [c.product_id for c in r.candidates] == ["p1"]
+    assert r.queries_tried == ["massage", "things to do"]
+
+
+def test_partner_error_on_first_query_propagates():
+    class Boom(FakeClient):
+        def search_partner(self, *a, **k):
+            raise LsApiError(503, "unavailable")
+    with pytest.raises(LsApiError):
+        run(Boom())
+
+
+def test_agent_search_skipped_when_nothing_sellable():
+    c = FakeClient(partner={"massage": [THC, hit("so", availabilityRequired=True)]})
+    run(c, path="A")
+    assert c.agent_calls == [] and c.offer_calls == []
+
+
+def test_429_on_detail_read_stops_remaining_reads():
+    hits = [hit("p%02d" % i, title="Deal %02d" % i) for i in range(5)]
+    sums = [summary("s%02d" % i, title="Deal %02d" % i) for i in range(5)]
+    c = FakeClient(partner={"massage": hits}, agent={"massage": sums},
+                   offers={}, offer_error=LsApiError(429, "resourceExhausted"))
+    r = run(c, path="A")
+    assert len(c.offer_calls) == 1
+    assert len(r.candidates) == 5 and all(x.fine_print is None for x in r.candidates)
