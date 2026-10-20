@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -8,7 +9,7 @@ from groupthink.debate import Line
 from groupthink.facts import Facts
 from groupthink.fit import Member, RankResult, rank
 from groupthink.kv import Kv
-from groupthink.store import SqliteStore, hash_ip
+from groupthink.store import PlanNotFound, SqliteStore, hash_ip
 from groupthink.store_durable import DurableStore
 from tests.fake_upstash import FakeUpstash
 
@@ -231,11 +232,69 @@ def test_durable_key_layout_and_ttl():
     s.record_cart(pid, "p1", "o1", "cart-a", now().isoformat())
     keys = fake.keys()
     assert keys and all(k.startswith("gt:") for k in keys)
+    deadline = json.loads(fake.data[f"gt:plan:{pid}"])["expires_at"]
+    assert 1209600 - 5 <= deadline - fake.clock <= 1209600 + 5
     for k in (f"gt:plan:{pid}", f"gt:cards:{pid}", f"gt:result:{pid}", f"gt:votes:{pid}",
-              f"gt:pick:{pid}", f"gt:carts:{pid}:o1", f"gt:argues:{pid}"):
+              f"gt:pick:{pid}", f"gt:carts:{pid}:o1", f"gt:argues:{pid}", f"gt:cartrec:{pid}:cart-a"):
         assert k in keys, k
-        assert fake.ttl(k) == 1209600, k
+        assert fake.expires[k] == deadline, k
     rate = [k for k in keys if k.startswith("gt:rate:")]
     assert len(rate) == 2 and any(k.startswith("gt:rate:all:") for k in rate)
     assert all(fake.ttl(k) == 2 * DAY for k in rate)
     assert not any("203.0.113" in c for cmd in fake.calls for c in map(str, cmd))
+
+
+def _durable():
+    fake = FakeUpstash()
+    return DurableStore(Kv("https://fake.upstash.io", "tok" + "_fake", transport=fake)), fake
+
+
+def _at(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+
+
+def test_child_written_late_expires_with_plan():
+    s, fake = _durable()
+    t0 = int(fake.clock)
+    pid = s.create_plan(plan(created_at=_at(t0)))
+    fake.advance(13 * DAY)
+    s.put_card(pid, mem("m1"))
+    s.put_vote(pid, "m1", "p1")
+    s.record_cart(pid, "p1", "o1", "cart-a", now().isoformat())
+    for k in (f"gt:cards:{pid}", f"gt:votes:{pid}", f"gt:carts:{pid}:o1", f"gt:cartrec:{pid}:cart-a"):
+        assert fake.expires[k] == t0 + 14 * DAY, k
+    fake.advance(DAY + 1)   # past t0 + 14d: plan and every child gone together
+    assert s.get_plan(pid) is None and s.cards(pid) == [] and s.votes(pid) == {}
+    assert s.carts_for(pid, "o1") == [] and s.carts() == []
+    assert [k for k in fake.keys() if not k.startswith("gt:rate:")] == []
+
+
+def test_child_write_to_missing_plan_raises():
+    s, fake = _durable()
+    with pytest.raises(PlanNotFound):
+        s.put_card("gone0000gone0000", mem("m1"))
+    with pytest.raises(PlanNotFound):
+        s.record_cart("gone0000gone0000", "p1", "o1", "c", "t")
+    assert fake.keys() == []
+
+
+def test_cart_records_expire_with_plan():
+    s, fake = _durable()
+    t0 = int(fake.clock)
+    old = s.create_plan(plan(created_at=_at(t0)))
+    s.record_cart(old, "p1", "o1", "cart-old", now().isoformat())
+    fake.advance(10 * DAY)
+    new = s.create_plan(plan(created_at=_at(t0 + 10 * DAY)))
+    s.record_cart(new, "p2", "o2", "cart-new", now().isoformat())
+    assert sorted(c["cart_id"] for c in s.carts()) == ["cart-new", "cart-old"]
+    fake.advance(5 * DAY)   # day 15: old record gone although a newer cart was written at day 10
+    assert [c["cart_id"] for c in s.carts()] == ["cart-new"]
+
+
+def test_each_write_and_expiry_is_one_transaction():
+    s, fake = _durable()
+    pid = s.create_plan(plan())
+    fake.requests.clear()
+    s.put_card(pid, mem("m1"))
+    txns = [b for u, b in fake.requests if u.endswith("/multi-exec")]
+    assert len(txns) == 1 and [c[0] for c in txns[0]] == ["HSET", "EXPIREAT"]

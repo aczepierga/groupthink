@@ -102,6 +102,36 @@ def test_list_and_hash_commands():
         ["HSET", "h", "f1", "v1"], ["HGETALL", "h"], ["HGETALL", "none"]]
 
 
+def test_expireat_and_scan_commands():
+    kv, t = _kv([(200, {"result": 1}), (200, {"result": ["5", ["a"]]}), (200, {"result": ["0", ["b"]]})])
+    assert kv.expireat("k", 1800000000) is True
+    assert kv.scan_keys("gt:x:*") == ["a", "b"]
+    assert [c["command"] for c in t.calls] == [
+        ["EXPIREAT", "k", 1800000000], ["SCAN", "0", "MATCH", "gt:x:*", "COUNT", 200],
+        ["SCAN", "5", "MATCH", "gt:x:*", "COUNT", 200]]
+
+
+def test_multi_exec_path_body_and_errors():
+    kv, t = _kv([(200, [{"result": 1}, {"result": 1}])])
+    assert kv.multi_exec([["HSET", "h", "f", "v"], ["EXPIREAT", "h", 1800000000]]) == [1, 1]
+    call = t.calls[0]
+    assert call["url"] == URL + "/multi-exec" and call["method"] == "POST"
+    assert call["command"] == [["HSET", "h", "f", "v"], ["EXPIREAT", "h", 1800000000]]
+    assert call["headers"]["Authorization"] == "Bearer " + TOKEN
+
+    kv, _ = _kv([(200, [{"result": 1}, {"error": "ERR bad " + TOKEN}])])   # one element failed
+    with pytest.raises(KvError) as e1:
+        kv.multi_exec([["A"], ["B"]])
+    assert TOKEN not in str(e1.value)
+
+    kv, _ = _kv([(200, {"error": "ERR discarded"})])                       # whole transaction discarded
+    with pytest.raises(KvError):
+        kv.multi_exec([["A"]])
+    kv, _ = _kv([(500, b"oops")])
+    with pytest.raises(KvError):
+        kv.multi_exec([["A"]])
+
+
 def test_repr_hides_token():
     kv = Kv(URL, TOKEN, transport=FakeTransport([]))
     assert TOKEN not in repr(kv) and TOKEN not in str(kv)

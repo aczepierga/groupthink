@@ -37,6 +37,13 @@ def parse_ts(value) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
+class PlanNotFound(Exception):
+    """DurableStore refuses a child write (card, vote, result, pick, cart) when the plan key is gone.
+
+    The plan is expired or never existed; the web layer maps this to the same "expired or not found" page.
+    """
+
+
 class Store(Protocol):
     def create_plan(self, plan: dict) -> str: ...
     def get_plan(self, plan_id: str) -> dict | None: ...

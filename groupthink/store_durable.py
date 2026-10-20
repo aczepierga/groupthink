@@ -1,19 +1,24 @@
 """DurableStore: the Store protocol on Upstash Redis via kv.Kv (Vercel has no durable disk).
 
-Key layout, all under the gt: namespace. Every plan-scoped key carries EX 1209600 (14 days), set on every
-write, so Redis expiry does the purging and purge_expired is a no-op. Raw IPs never reach Redis.
+One absolute deadline per plan: create_plan stores expires_at = created_at + 14 days (unix seconds) in the
+plan record and EXPIREATs the plan key to it. Every child write reads that deadline and EXPIREATs the child
+key to the SAME instant, so nothing outlives its plan (a card written on day 13 still dies on day 14).
+A child write whose plan key is gone raises PlanNotFound (web layer shows the expired/not-found page).
+Each write and its EXPIREAT travel as one /multi-exec transaction, so a key can never be left without a
+deadline. purge_expired is a no-op: Redis does the deleting. Raw IPs never reach Redis.
 
-  gt:plan:<id>               JSON plan                      string
-  gt:cards:<id>              member_id -> JSON Member       hash
-  gt:result:<id>             JSON {"lines", "result"}       string
-  gt:argues:<id>             /argue runs                    counter
-  gt:votes:<id>              member_id -> product_id        hash
-  gt:pick:<id>               product_id                     string
-  gt:carts:<id>:<option_id>  cart ids, append order         list
-  gt:cartlog                 JSON cart records, all plans   list (rolling TTL, filtered by created_at)
-  gt:rate:<ip_hash>:<yyyymmdd>, gt:rate:all:<yyyymmdd>      counters, 2-day EX
+  gt:plan:<id>                   JSON plan incl. expires_at   string
+  gt:cards:<id>                  member_id -> JSON Member     hash
+  gt:result:<id>                 JSON {"lines", "result"}     string
+  gt:argues:<id>                 /argue runs                  counter
+  gt:votes:<id>                  member_id -> product_id      hash
+  gt:pick:<id>                   product_id                   string
+  gt:carts:<id>:<option_id>      cart ids, append order       list
+  gt:cartrec:<id>:<cart_id>      JSON cart record (carts())   string, one key per cart
+  gt:rate:<ip_hash>:<yyyymmdd>, gt:rate:all:<yyyymmdd>        counters, 2-day expiry
 
-Rate counts are per UTC day: count_plans(ip, since) sums the day buckets from since's date to today.
+carts() (admin export) SCANs gt:cartrec:*; records expire with their plan. Rate counts are per UTC day:
+count_plans(ip, since) sums the day buckets from since's date to today.
 """
 import json
 from collections import Counter
@@ -22,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 from .debate import Line
 from .fit import Member, RankResult
 from .kv import Kv
-from .store import RATE_TTL_SECONDS, TTL_DAYS, TTL_SECONDS, new_plan_id, parse_ts
+from .store import RATE_TTL_SECONDS, TTL_SECONDS, PlanNotFound, new_plan_id, parse_ts
 
 P = "gt:"
 
@@ -31,13 +36,16 @@ class DurableStore:
     def __init__(self, kv: Kv):
         self.kv = kv
 
-    # -- helpers --
-    def _set(self, key, value):
-        self.kv.set(key, value, ex_seconds=TTL_SECONDS)
+    def _deadline(self, plan_id):
+        raw = self.kv.get(P + "plan:" + plan_id)
+        if not raw:
+            raise PlanNotFound(plan_id)
+        return int(json.loads(raw)["expires_at"])
 
-    def _get_json(self, key):
-        raw = self.kv.get(key)
-        return json.loads(raw) if raw else None
+    def _write(self, plan_id, commands, keys):
+        """Run commands plus an EXPIREAT <plan deadline> per key as one transaction."""
+        deadline = self._deadline(plan_id)
+        self.kv.multi_exec([list(c) for c in commands] + [["EXPIREAT", k, deadline] for k in keys])
 
     @staticmethod
     def _day(dt):
@@ -49,39 +57,40 @@ class DurableStore:
         plan_id = new_plan_id()
         created = parse_ts(plan.get("created_at") or datetime.now(timezone.utc))
         ip_hash = plan.pop("ip_hash", None)
-        plan.update(id=plan_id, created_at=created.isoformat())
-        self._set(P + "plan:" + plan_id, json.dumps(plan))
+        deadline = int(created.timestamp()) + TTL_SECONDS
+        plan.update(id=plan_id, created_at=created.isoformat(), expires_at=deadline)
+        key = P + "plan:" + plan_id
         day = self._day(created)
-        keys = [P + "rate:all:" + day] + ([P + "rate:" + ip_hash + ":" + day] if ip_hash else [])
-        for key in keys:
-            self.kv.incr(key)
-            self.kv.expire(key, RATE_TTL_SECONDS)
+        rate_keys = [P + "rate:all:" + day] + ([P + "rate:" + ip_hash + ":" + day] if ip_hash else [])
+        cmds = [["SET", key, json.dumps(plan)], ["EXPIREAT", key, deadline]]
+        for rk in rate_keys:
+            cmds += [["INCR", rk], ["EXPIRE", rk, RATE_TTL_SECONDS]]
+        self.kv.multi_exec(cmds)
         return plan_id
 
     def get_plan(self, plan_id):
-        return self._get_json(P + "plan:" + plan_id)   # expired == deleted by Redis == None
+        raw = self.kv.get(P + "plan:" + plan_id)   # expired == deleted by Redis == None
+        return json.loads(raw) if raw else None
 
     # -- cards --
     def put_card(self, plan_id, member):
         key = P + "cards:" + plan_id
-        self.kv.hset(key, member.id, json.dumps(member.to_dict()))
-        self.kv.expire(key, TTL_SECONDS)
+        self._write(plan_id, [["HSET", key, member.id, json.dumps(member.to_dict())]], [key])
 
     def cards(self, plan_id):
         return [Member.from_dict(json.loads(v)) for v in self.kv.hgetall(P + "cards:" + plan_id).values()]
 
     # -- debate result --
     def save_result(self, plan_id, lines, result):
-        self._set(P + "result:" + plan_id,
-                  json.dumps({"lines": [ln.to_dict() for ln in lines], "result": result.to_dict()}))
-        key = P + "argues:" + plan_id
-        self.kv.incr(key)
-        self.kv.expire(key, TTL_SECONDS)
+        rkey, akey = P + "result:" + plan_id, P + "argues:" + plan_id
+        body = json.dumps({"lines": [ln.to_dict() for ln in lines], "result": result.to_dict()})
+        self._write(plan_id, [["SET", rkey, body], ["INCR", akey]], [rkey, akey])
 
     def get_result(self, plan_id):
-        d = self._get_json(P + "result:" + plan_id)
-        if d is None:
+        raw = self.kv.get(P + "result:" + plan_id)
+        if not raw:
             return None
+        d = json.loads(raw)
         return [Line.from_dict(x) for x in d["lines"]], RankResult.from_dict(d["result"])
 
     def argue_count(self, plan_id):
@@ -90,44 +99,37 @@ class DurableStore:
     # -- votes / pick --
     def put_vote(self, plan_id, member_id, product_id):
         key = P + "votes:" + plan_id
-        self.kv.hset(key, member_id, product_id)
-        self.kv.expire(key, TTL_SECONDS)
+        self._write(plan_id, [["HSET", key, member_id, product_id]], [key])
 
     def votes(self, plan_id):
         return dict(Counter(self.kv.hgetall(P + "votes:" + plan_id).values()))
 
     def set_pick(self, plan_id, product_id):
-        self._set(P + "pick:" + plan_id, product_id)
+        key = P + "pick:" + plan_id
+        self._write(plan_id, [["SET", key, product_id]], [key])
 
     def get_pick(self, plan_id):
         return self.kv.get(P + "pick:" + plan_id)
 
     # -- carts --
     def record_cart(self, plan_id, product_id, option_id, cart_id, created_at):
-        key = P + "carts:%s:%s" % (plan_id, option_id)
-        if cart_id in self.kv.lrange(key):
+        lkey = P + "carts:%s:%s" % (plan_id, option_id)
+        if cart_id in self.kv.lrange(lkey):
             return
-        self.kv.rpush(key, cart_id)
-        self.kv.expire(key, TTL_SECONDS)
-        self.kv.rpush(P + "cartlog", json.dumps({"plan_id": plan_id, "product_id": product_id,
-                                                  "option_id": option_id, "cart_id": cart_id,
-                                                  "created_at": str(created_at)}))
-        self.kv.expire(P + "cartlog", TTL_SECONDS)
+        rec_key = P + "cartrec:%s:%s" % (plan_id, cart_id)
+        rec = json.dumps({"plan_id": plan_id, "product_id": product_id, "option_id": option_id,
+                          "cart_id": cart_id, "created_at": str(created_at)})
+        self._write(plan_id, [["RPUSH", lkey, cart_id], ["SET", rec_key, rec]], [lkey, rec_key])
 
     def carts_for(self, plan_id, option_id):
         return list(self.kv.lrange(P + "carts:%s:%s" % (plan_id, option_id)))
 
     def carts(self):
-        cutoff = datetime.now(timezone.utc) - timedelta(days=TTL_DAYS)
         out = []
-        for raw in self.kv.lrange(P + "cartlog"):
-            rec = json.loads(raw)
-            try:
-                if parse_ts(rec["created_at"]) < cutoff:
-                    continue
-            except (ValueError, KeyError):
-                pass
-            out.append(rec)
+        for key in sorted(self.kv.scan_keys(P + "cartrec:*")):
+            raw = self.kv.get(key)
+            if raw:
+                out.append(json.loads(raw))
         return out
 
     # -- rate counters --
@@ -146,4 +148,4 @@ class DurableStore:
         return self._sum_days(P + "rate:all:", since)
 
     def purge_expired(self, now):
-        return 0   # every plan-scoped key expires in Redis at 14 days
+        return 0   # every plan-scoped key is EXPIREAT the plan deadline

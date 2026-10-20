@@ -78,6 +78,45 @@ class Kv:
     def delete(self, key):
         return self._command("DEL", key)
 
+    def expireat(self, key, unix_seconds):
+        return bool(self._command("EXPIREAT", key, int(unix_seconds)))
+
+    def multi_exec(self, commands):
+        """Run commands as one Upstash transaction: POST <url>/multi-exec with a 2-D JSON array.
+
+        Upstash REST docs (https://upstash.com/docs/redis/features/restapi, transactions section):
+        'API endpoint for transaction is `/multi-exec`' and the success response is
+        [{"result":...},{"result":...},{"error":"ERR ..."}]; a discarded transaction returns one
+        {"error":"ERR ..."} object. Any error element raises KvError (all commands still ran).
+        """
+        headers = {"Authorization": "Bearer " + self._token, "Content-Type": "application/json"}
+        body = json.dumps([list(c) for c in commands]).encode()
+        try:
+            status, _, raw = self._transport("POST", self.url + "/multi-exec", headers, body, TIMEOUT_S)
+        except Exception as exc:
+            raise KvError("KV transport failed: " + type(exc).__name__) from None
+        try:
+            payload = json.loads(raw.decode("utf8", "replace")) if raw else None
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            raise KvError("KV HTTP %s: %s" % (status, self._scrub(payload.get("error", ""))))
+        if not 200 <= status < 300 or not isinstance(payload, list) or len(payload) != len(commands):
+            raise KvError("KV multi-exec failed: HTTP %s" % status)
+        for item in payload:
+            if not isinstance(item, dict) or item.get("error"):
+                raise KvError("KV multi-exec error: " + self._scrub(item.get("error", "") if isinstance(item, dict) else ""))
+        return [item.get("result") for item in payload]
+
+    def scan_keys(self, pattern):
+        """All keys matching a glob pattern (SCAN loop)."""
+        cursor, out = "0", []
+        while True:
+            cursor, keys = self._command("SCAN", cursor, "MATCH", pattern, "COUNT", 200)
+            out.extend(keys)
+            if str(cursor) == "0":
+                return out
+
     def rpush(self, key, value):
         return self._command("RPUSH", key, value)
 
