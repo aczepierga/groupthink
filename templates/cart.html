@@ -23,7 +23,7 @@
   {% elif new_price %}
   <div class="callout" role="status">
     <p><strong>{{ view.message }}</strong></p>
-    <p>The group voted on {{ unit }} per voucher. Groupon now charges {{ new_price }} per voucher for {{ view.quantity }} voucher{{ '' if view.quantity == 1 else 's' }}. No cart link is shown until someone agrees to the new price.</p>
+    <p>The price shown was {{ unit }} per voucher. Groupon now charges {{ new_price }} per voucher for {{ view.quantity }} voucher{{ '' if view.quantity == 1 else 's' }}. No cart link is shown until someone agrees to the new price.</p>
     <form method="post" action="/p/{{ plan_id }}/cart">
       <input type="hidden" name="product_id" value="{{ product_id }}">
       <input type="hidden" name="expected_minor" value="{{ view.new_price_minor }}">

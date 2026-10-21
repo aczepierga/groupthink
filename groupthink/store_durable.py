@@ -15,6 +15,9 @@ deadline. purge_expired is a no-op: Redis does the deleting. Raw IPs never reach
   gt:pick:<id>                   product_id                   string
   gt:carts:<id>:<option_id>      cart ids, append order       list
   gt:cartrec:<id>:<cart_id>      JSON cart record (carts())   string, one key per cart
+  gt:cartcreates:<id>            carts claimed for creation   counter (claim INCRBYs, over the ceiling DECRBYs back)
+  gt:accepted:<id>               option_id -> accepted price  hash
+  gt:adminfail:<ip_hash>:<yyyymmddhh>  wrong admin tokens     counter, 2-hour expiry
   gt:rate:<ip_hash>:<yyyymmdd>, gt:rate:all:<yyyymmdd>        counters, 2-day expiry
 
 carts() (admin export) SCANs gt:cartrec:*; records expire with their plan. Rate counts are per UTC day:
@@ -155,6 +158,42 @@ class DurableStore:
             if raw:
                 out.append(json.loads(raw))
         return out
+
+    def claim_cart_creates(self, plan_id, n, ceiling):
+        """INCRBY (with the plan deadline, one transaction); over `ceiling` it is DECRBYed back and False is
+        returned. Of N racing claims the total never stays above the ceiling; a claim that races a doomed
+        one may be refused for a moment, which only ever errs towards fewer carts."""
+        key = P + "cartcreates:" + plan_id
+        total = int(self._write(plan_id, [["INCRBY", key, int(n)]], [key])[0])
+        if total > ceiling:
+            self.kv.decrby(key, n)
+            return False
+        return True
+
+    def release_cart_creates(self, plan_id, n):
+        key = P + "cartcreates:" + plan_id
+        left = int(self.kv.decrby(key, n))
+        if left < 0:
+            self.kv.incrby(key, -left)
+
+    def set_accepted_price(self, plan_id, option_id, price_minor):
+        key = P + "accepted:" + plan_id
+        self._write(plan_id, [["HSET", key, option_id, str(int(price_minor))]], [key])
+
+    def get_accepted_price(self, plan_id, option_id):
+        raw = self.kv.hgetall(P + "accepted:" + plan_id).get(option_id)
+        return int(raw) if raw is not None else None
+
+    # -- admin token throttle --
+    def _admin_key(self, ip_hash, now):
+        return P + "adminfail:%s:%s" % (ip_hash, parse_ts(now).strftime("%Y%m%d%H"))
+
+    def note_admin_failure(self, ip_hash, now):
+        key = self._admin_key(ip_hash, now)
+        return int(self.kv.multi_exec([["INCR", key], ["EXPIRE", key, 2 * 3600]])[0])
+
+    def admin_failures(self, ip_hash, now):
+        return int(self.kv.get(self._admin_key(ip_hash, now)) or 0)
 
     # -- rate counters --
     def _sum_days(self, prefix, since):

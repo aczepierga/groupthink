@@ -67,6 +67,10 @@ class FakeUpstash:
         if op == "DECR":
             d[args[0]] = str(int(d.get(args[0], "0")) - 1)
             return int(d[args[0]])
+        if op in ("INCRBY", "DECRBY"):
+            step = int(args[1]) * (1 if op == "INCRBY" else -1)
+            d[args[0]] = str(int(d.get(args[0], "0")) + step)
+            return int(d[args[0]])
         if op == "HLEN":
             return len(d.get(args[0], {}))
         if op == "HDEL":

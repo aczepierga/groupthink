@@ -376,3 +376,65 @@ def test_each_write_and_expiry_is_one_transaction():
     s.put_card(pid, mem("m1"))
     txns = [b for u, b in fake.requests if u.endswith("/multi-exec")]
     assert len(txns) == 1 and [c[0] for c in txns[0]] == ["HSET", "EXPIREAT"]
+
+
+# ---- cart creation ceiling, accepted price, admin throttle -------------------------------------------
+
+def test_claim_cart_creates_is_capped_and_releasable(be):
+    s = be.store
+    pid = s.create_plan(plan())
+    assert s.claim_cart_creates(pid, 3, 9) and s.claim_cart_creates(pid, 3, 9) and s.claim_cart_creates(pid, 3, 9)
+    assert not s.claim_cart_creates(pid, 1, 9)           # at the ceiling
+    assert not s.claim_cart_creates(pid, 3, 9)
+    s.release_cart_creates(pid, 2)
+    assert s.claim_cart_creates(pid, 2, 9) and not s.claim_cart_creates(pid, 1, 9)
+    s.release_cart_creates(pid, 50)                      # never below zero
+    assert s.claim_cart_creates(pid, 9, 9) and not s.claim_cart_creates(pid, 1, 9)
+
+
+def test_claim_cart_creates_on_missing_plan_raises(be):
+    with pytest.raises(PlanNotFound):
+        be.store.claim_cart_creates("gone0000gone0000", 1, 3)
+
+
+def test_accepted_price_round_trip_per_option(be):
+    s = be.store
+    pid = s.create_plan(plan())
+    assert s.get_accepted_price(pid, "o1") is None
+    s.set_accepted_price(pid, "o1", 3100)
+    s.set_accepted_price(pid, "o2", 450)
+    assert (s.get_accepted_price(pid, "o1"), s.get_accepted_price(pid, "o2")) == (3100, 450)
+    s.set_accepted_price(pid, "o1", 3200)
+    assert s.get_accepted_price(pid, "o1") == 3200
+    with pytest.raises(PlanNotFound):
+        s.set_accepted_price("gone0000gone0000", "o1", 1)
+
+
+def test_admin_failures_count_per_ip_per_hour(be):
+    s = be.store
+    t = datetime(2026, 10, 21, 12, 30, tzinfo=timezone.utc)
+    assert s.admin_failures("a" * 64, t) == 0
+    assert [s.note_admin_failure("a" * 64, t) for _ in range(3)] == [1, 2, 3]
+    assert s.admin_failures("a" * 64, t) == 3 and s.admin_failures("b" * 64, t) == 0
+    assert s.admin_failures("a" * 64, t + timedelta(hours=1)) == 0       # next hour, fresh allowance
+
+
+def test_cart_creation_keys_expire_with_plan_and_throttle_keys_expire():
+    s, fake = _durable()
+    t0 = int(fake.clock)
+    pid = s.create_plan(plan(created_at=_at(t0)))
+    fake.advance(5 * DAY)
+    assert s.claim_cart_creates(pid, 2, 9)
+    s.set_accepted_price(pid, "o1", 3100)
+    for k in (f"gt:cartcreates:{pid}", f"gt:accepted:{pid}"):
+        assert fake.expires[k] == t0 + 14 * DAY, k
+    s.note_admin_failure("c" * 64, now())
+    key = [k for k in fake.keys() if k.startswith("gt:adminfail:")][0]
+    assert fake.ttl(key) == 2 * 3600
+    # the claim and its deadline travel in one transaction
+    fake.requests.clear()
+    s.claim_cart_creates(pid, 1, 9)
+    txns = [b for u, b in fake.requests if u.endswith("/multi-exec")]
+    assert len(txns) == 1 and [c[0] for c in txns[0]] == ["INCRBY", "EXPIREAT"]
+    fake.advance(10 * DAY)
+    assert [k for k in fake.keys() if k.startswith(("gt:cartcreates", "gt:accepted"))] == []

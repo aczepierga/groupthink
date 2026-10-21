@@ -63,6 +63,12 @@ class Store(Protocol):
                     created_at: str) -> None: ...
     def carts_for(self, plan_id: str, option_id: str) -> list[str]: ...
     def carts(self) -> list[dict]: ...
+    def claim_cart_creates(self, plan_id: str, n: int, ceiling: int) -> bool: ...
+    def release_cart_creates(self, plan_id: str, n: int) -> None: ...
+    def set_accepted_price(self, plan_id: str, option_id: str, price_minor: int) -> None: ...
+    def get_accepted_price(self, plan_id: str, option_id: str) -> int | None: ...
+    def note_admin_failure(self, ip_hash: str, now: datetime) -> int: ...
+    def admin_failures(self, ip_hash: str, now: datetime) -> int: ...
     def count_plans(self, ip_hash: str, since: datetime) -> int: ...
     def count_all_plans(self, since: datetime) -> int: ...
     def purge_expired(self, now: datetime) -> int: ...
@@ -77,8 +83,11 @@ CREATE TABLE IF NOT EXISTS votes (plan_id TEXT, member_id TEXT, product_id TEXT 
 CREATE TABLE IF NOT EXISTS picks (plan_id TEXT PRIMARY KEY, product_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS carts (seq INTEGER PRIMARY KEY AUTOINCREMENT, plan_id TEXT NOT NULL, product_id TEXT,
   option_id TEXT NOT NULL, cart_id TEXT NOT NULL, created_at TEXT, UNIQUE (plan_id, option_id, cart_id));
+CREATE TABLE IF NOT EXISTS cartcreates (plan_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS accepted (plan_id TEXT, option_id TEXT, price INTEGER NOT NULL, PRIMARY KEY (plan_id, option_id));
+CREATE TABLE IF NOT EXISTS adminfail (ip_hash TEXT, hour TEXT, n INTEGER NOT NULL, PRIMARY KEY (ip_hash, hour));
 """
-_CHILDREN = ("cards", "results", "runs", "votes", "picks", "carts")
+_CHILDREN = ("cards", "results", "runs", "votes", "picks", "carts", "cartcreates", "accepted")
 
 
 class SqliteStore:
@@ -205,6 +214,48 @@ class SqliteStore:
         rows = self._db.execute("SELECT plan_id, product_id, option_id, cart_id, created_at FROM carts ORDER BY seq")
         return [dict(zip(("plan_id", "product_id", "option_id", "cart_id", "created_at"), r)) for r in rows]
 
+    def claim_cart_creates(self, plan_id, n, ceiling):
+        """Atomically add `n` to the plan's cart-creation count unless that would pass `ceiling`."""
+        self._require_plan(plan_id)
+        with self._lock:
+            self._db.execute("INSERT OR IGNORE INTO cartcreates VALUES (?,0)", (plan_id,))
+            cur = self._db.execute("UPDATE cartcreates SET n=n+? WHERE plan_id=? AND n+?<=?",
+                                   (n, plan_id, n, ceiling))
+            self._db.commit()
+            return cur.rowcount == 1
+
+    def release_cart_creates(self, plan_id, n):
+        with self._lock:
+            self._db.execute("UPDATE cartcreates SET n=MAX(n-?,0) WHERE plan_id=?", (n, plan_id))
+            self._db.commit()
+
+    def set_accepted_price(self, plan_id, option_id, price_minor):
+        self._require_plan(plan_id)
+        self._db.execute("INSERT OR REPLACE INTO accepted VALUES (?,?,?)", (plan_id, option_id, int(price_minor)))
+        self._db.commit()
+
+    def get_accepted_price(self, plan_id, option_id):
+        row = self._db.execute("SELECT price FROM accepted WHERE plan_id=? AND option_id=?",
+                               (plan_id, option_id)).fetchone()
+        return row[0] if row else None
+
+    @staticmethod
+    def _hour(now):
+        return parse_ts(now).strftime("%Y%m%d%H")
+
+    def note_admin_failure(self, ip_hash, now):
+        with self._lock:
+            self._db.execute("INSERT OR IGNORE INTO adminfail VALUES (?,?,0)", (ip_hash, self._hour(now)))
+            self._db.execute("UPDATE adminfail SET n=n+1 WHERE ip_hash=? AND hour=?", (ip_hash, self._hour(now)))
+            self._db.commit()
+            return self._db.execute("SELECT n FROM adminfail WHERE ip_hash=? AND hour=?",
+                                    (ip_hash, self._hour(now))).fetchone()[0]
+
+    def admin_failures(self, ip_hash, now):
+        row = self._db.execute("SELECT n FROM adminfail WHERE ip_hash=? AND hour=?",
+                               (ip_hash, self._hour(now))).fetchone()
+        return row[0] if row else 0
+
     def count_plans(self, ip_hash, since):
         row = self._db.execute("SELECT COUNT(*) FROM plans WHERE ip_hash=? AND created_at>=?",
                                (ip_hash, parse_ts(since).isoformat())).fetchone()
@@ -222,5 +273,6 @@ class SqliteStore:
             for table in _CHILDREN:
                 self._db.execute("DELETE FROM %s WHERE plan_id=?" % table, (pid,))
             self._db.execute("DELETE FROM plans WHERE id=?", (pid,))
+        self._db.execute("DELETE FROM adminfail WHERE hour<?", (self._hour(parse_ts(now) - timedelta(hours=3)),))
         self._db.commit()
         return len(ids)

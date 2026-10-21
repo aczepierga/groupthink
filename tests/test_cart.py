@@ -39,15 +39,18 @@ class CartApi:
         self.fail_create = None            # (status, body) returned for every POST /carts
         self.line_unavailable = False
         self.order_for = {}                # cart id -> grouponOrderUuid
+        self.lock_prices = False           # True: a cart keeps the price it was made at
+        self.price_after_creates = {}      # n carts created so far -> new live price
 
     def now(self):
         return self.env.clock[0] if self.env else T0
 
     def cart_body(self, cid):
         c = self.carts[cid]
-        items = [line_json(i, i["quantity"], self.price, not self.line_unavailable,
+        price = c["price"] if self.lock_prices else self.price
+        items = [line_json(i, i["quantity"], price, not self.line_unavailable,
                            "SOLD_OUT" if self.line_unavailable else None) for i in c["items"]]
-        total = sum(i["quantity"] * self.price for i in c["items"])
+        total = sum(i["quantity"] * price for i in c["items"])
         return {"id": cid, "status": c["status"], "buyLink": "https://%s/cart/%s?utm_source=LS_AI&utm_campaign=sf1"
                 % (BUY_HOST, cid), "country": "US", "currency": "USD", "clientReference": c["ref"],
                 "itemCount": sum(i["quantity"] for i in c["items"]), "items": items,
@@ -74,10 +77,13 @@ class CartApi:
             cid = "cart-%d" % (len(self.carts) + 1)
             now = self.now()
             self.carts[cid] = {"status": "ACTIVE", "ref": req["clientReference"], "created": now.isoformat(),
+                               "price": self.price,
                                "expires": (now + timedelta(days=1)).isoformat(),
                                "items": [{"productId": item["productId"], "optionId": item["optionId"],
                                           "quantity": item["quantity"]}]}
-            return 200, {}, json.dumps(self.cart_body(cid)).encode()
+            body_out = json.dumps(self.cart_body(cid)).encode()
+            self.price = self.price_after_creates.get(len(self.carts), self.price)
+            return 200, {}, body_out
         if method == "GET" and "/partner_storefront/carts/" in path:
             cid = path.rsplit("/", 1)[1]
             if cid not in self.carts:
@@ -111,18 +117,18 @@ def _cart_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def make_env(fine=NO_LIMIT, price=3000):
+def make_env(fine=NO_LIMIT, price=3000, hits=None):
     api = CartApi(price)
-    hits = [p_hit("p1", "Pottery Wheel Night", price), p_hit("p2", "Axe Throwing Hour", price + 500),
+    hits = hits or [p_hit("p1", "Pottery Wheel Night", price), p_hit("p2", "Axe Throwing Hour", price + 500),
             p_hit("p3", "Escape Room Hour", price + 1000)]       # cheapest first: p1 ranks first
     env = Env(ls=CartLs(api, hits=hits, fine=fine))
     api.env = env
     return env, api
 
 
-def final_group(env, api):
+def final_group(env, api, **group_kw):
     """A finished group: everyone voted for the top-ranked option. Returns (pid, host, members, ranked)."""
-    pid, host, members = group(env)
+    pid, host, members = group(env, **group_kw)
     argue(host, pid)
     ranked = env.store.get_result(pid)[1].top[0]
     assert ranked.candidate.price_minor == api.price
@@ -532,3 +538,160 @@ def test_admin_csv_empty_is_just_the_header(monkeypatch):
     env, _ = make_env()
     r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
     assert r.text.strip() == "cart_id,plan_id,status,has_order,created_at"
+
+
+# ---- fix round 1: ceiling, convergence, min units, accepted price, throttle ----------------------------
+
+def ranked_for(quantity, limit, min_units=1):
+    from groupthink.candidates import Candidate
+    from groupthink.facts import Facts
+    from groupthink.fit import Ranked
+    cand = Candidate("p1", "o1", None, "Deal", "Std", None, "", "", 3000, None, 2, 1, "exactly", min_units, None,
+                     None, [], [], None, None, Facts(limit_per_person=limit))
+    return Ranked(cand, quantity, [], 0.0, None, [])
+
+
+def test_chunks_respect_min_units():
+    from groupthink.cart import checkouts_for
+    assert checkouts_for(ranked_for(4, 3, min_units=2)) == (2, [2, 2])          # not [3, 1]
+    assert checkouts_for(ranked_for(7, 3, min_units=2)) == (3, [3, 2, 2])
+    assert checkouts_for(ranked_for(3, 1)) == (3, [1, 1, 1])
+    assert checkouts_for(ranked_for(5, 9)) == (1, [5])                         # limit above the quantity
+    assert checkouts_for(ranked_for(9, 2, min_units=2)) == (5, None)           # no split meets the minimum
+    for qty, limit, mn in [(4, 3, 2), (7, 3, 2), (10, 4, 1), (8, 2, 2)]:
+        n, chunks = checkouts_for(ranked_for(qty, limit, mn))
+        assert chunks and sum(chunks) == qty and all(mn <= c <= limit for c in chunks)
+    # and through the route: a group of 4, limit 3, minimum 2 -> two carts of 2
+    hit = p_hit("p1", "Pottery Wheel Night", 3000)
+    hit["options"][0]["minUnits"] = 2
+    env, api = make_env(fine=("Limit 3 per person.",), hits=[hit])
+    pid, host, _, ranked = final_group(env, api, size="4", others=(("Bo", "40"), ("Cy", "60"), ("Di", "50")))
+    assert ranked.quantity == 4
+    r = get_cart_link(host, pid)
+    assert sorted(p["items"][0]["quantity"] for p in api.posts) == [2, 2]
+    assert len(checkout_hrefs(r.text)) == 2
+
+
+def test_impossible_split_message_no_api_call():
+    hit = p_hit("p1", "Pottery Wheel Night", 3000)
+    hit["options"][0]["minUnits"] = 2
+    env, api = make_env(fine=("Limit 1 per person.",), hits=[hit])
+    pid, host, _, ranked = final_group(env, api)         # 3 vouchers, one per checkout, minimum 2 each
+    r = get_cart_link(host, pid)
+    assert r.status_code == 200
+    assert "cannot be split into checkouts that meet its minimum" in r.text
+    assert checkout_hrefs(r.text) == [] and api.urls == [] and api.posts == []
+    assert env.store.carts_for(pid, ranked.candidate.option_id) == []
+    g = host.get(f"/p/{pid}/cart")
+    assert "cannot be split" in g.text and api.urls == []
+
+
+def test_cart_ceiling_refuses_without_api_call():
+    env, api = make_env(fine=("Limit 1 per person.",))
+    pid, host, _, ranked = final_group(env, api)         # 3 checkouts -> ceiling 9
+    assert env.store.claim_cart_creates(pid, 8, 9)       # other requests already hold 8 of the 9
+    r = get_cart_link(host, pid)
+    assert r.status_code == 429
+    assert "already being prepared" in r.text and "Refresh in a few seconds" in r.text
+    assert api.urls == [] and api.posts == []
+    assert checkout_hrefs(r.text) == []
+
+
+def test_parallel_cart_posts_capped():
+    """Two requests that both read zero existing carts (the second runs inside the first's create call):
+    the store ceiling stops the second before it calls the API."""
+    from groupthink.cart import CartBusy, make_carts
+    env, api = make_env(fine=("Limit 1 per person.",))
+    pid, host, _, ranked = final_group(env, api)
+    client = env.ls.client
+    ceiling = 9
+    assert env.store.claim_cart_creates(pid, 6, ceiling)          # the ceiling edge: room for exactly one batch
+    outcomes = []
+    real_create = client.create_cart
+
+    def racing_create(items, ref):
+        if not outcomes:
+            outcomes.append("nested")
+            try:
+                make_carts(client, env.store, ranked, pid, now=T0)
+                outcomes.append("second ran")
+            except CartBusy:
+                outcomes.append("second busy")
+        return real_create(items, ref)
+    client.create_cart = racing_create
+    view = make_carts(client, env.store, ranked, pid, now=T0)
+    assert outcomes == ["nested", "second busy"]
+    assert len(api.posts) == 3 and len(view.links) == 3
+    # claimed total never passes the ceiling: one more claim of any size is refused
+    assert not env.store.claim_cart_creates(pid, 1, ceiling)
+
+
+def test_failed_create_gives_the_claim_back():
+    env, api = make_env(fine=("Limit 1 per person.",))
+    pid, host, _, _ = final_group(env, api)
+    api.price = 3100
+    for _ in range(6):                                   # six price-changed screens in a row
+        assert "Price changed" in get_cart_link(host, pid).text
+    assert get_cart_link(host, pid).status_code == 200   # never ran into the ceiling
+
+
+def test_mid_split_price_change_converges():
+    env, api = make_env(fine=("Limit 1 per person.",))
+    api.lock_prices = True
+    api.price_after_creates = {1: 3100}                  # the price moves right after the first cart
+    pid, host, _, ranked = final_group(env, api)
+    api.price = 3000
+    r = get_cart_link(host, pid)
+    assert "Price changed to $31.00" in r.text and checkout_hrefs(r.text) == []
+    assert api.carts["cart-1"]["price"] == 3000          # one cart exists at the old price
+    r = get_cart_link(host, pid, product_id=ranked.candidate.product_id, expected_minor="3100")
+    links = checkout_hrefs(r.text)
+    assert len(links) == 3 and "Price changed" not in r.text
+    assert not any("/cart/cart-1?" in link for link in links)         # the old-price cart is not reused
+    shown = {link.split("/cart/")[1].split("?")[0] for link in links}
+    assert all(api.carts[cid]["price"] == 3100 for cid in shown)
+    assert "$31.00" in r.text and "$93.00" in r.text
+    # nothing flips back on the next read
+    again = host.get(f"/p/{pid}/cart")
+    assert len(checkout_hrefs(again.text)) == 3 and "Price changed" not in again.text
+
+
+def test_get_after_confirm_shows_links():
+    env, api = make_env()
+    pid, host, _, ranked = final_group(env, api)
+    api.price = 3100
+    get_cart_link(host, pid)
+    r = get_cart_link(host, pid, expected_minor="3100")
+    assert len(checkout_hrefs(r.text)) == 1
+    assert env.store.get_accepted_price(pid, ranked.candidate.option_id) == 3100
+    g = host.get(f"/p/{pid}/cart")                       # no price in the request: the accepted one is used
+    assert len(checkout_hrefs(g.text)) == 1 and "$31.00" in g.text and "Price changed" not in g.text
+    again = get_cart_link(host, pid)                     # a plain second click reuses it too
+    assert len(checkout_hrefs(again.text)) == 1 and len(api.posts) == 2
+
+
+def test_confirmed_price_is_bounded_to_twice_the_voted_price():
+    env, api = make_env()
+    pid, host, _, ranked = final_group(env, api)
+    for bad in ("6001", "0", "-5", "abc", "99999999"):
+        r = get_cart_link(host, pid, expected_minor=bad)
+        assert r.status_code == 400, bad
+    assert api.urls == []
+    api.price = 6000
+    r = get_cart_link(host, pid, expected_minor="6000")  # exactly 2x is allowed
+    assert r.status_code == 200 and len(checkout_hrefs(r.text)) == 1
+
+
+def test_admin_route_throttles_wrong_tokens(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", ADMIN)
+    env, _ = make_env()
+    c = env.browser()
+    ip = {"x-real-ip": "198.51.100.7"}
+    for _ in range(5):
+        assert c.get("/admin/carts.csv", headers=dict(ip, **{"X-Admin-Token": "wrong"})).status_code == 403
+    assert c.get("/admin/carts.csv", headers=dict(ip, **{"X-Admin-Token": "wrong"})).status_code == 429
+    assert c.get("/admin/carts.csv", headers=dict(ip, **{"X-Admin-Token": ADMIN})).status_code == 429
+    other = {"x-real-ip": "198.51.100.8"}
+    assert c.get("/admin/carts.csv", headers=dict(other, **{"X-Admin-Token": ADMIN})).status_code == 200
+    env.advance(hours=1)                                  # a new hour, a new allowance
+    assert c.get("/admin/carts.csv", headers=dict(ip, **{"X-Admin-Token": ADMIN})).status_code == 200

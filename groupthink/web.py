@@ -25,7 +25,7 @@ from fastapi.responses import RedirectResponse, Response
 from . import demo as demo_data
 from . import limits
 from .candidates import Candidate
-from .cart import make_carts
+from .cart import CartBusy, make_carts
 from .debate import run_debate
 from .fit import Member, Ranked, RankResult, per_member_spend_minor, rank
 from .kv import Kv
@@ -720,7 +720,8 @@ def pick(plan_id: str, request: Request, form: dict = Depends(read_form), deps: 
 
 # ---- cart and order evidence ----------------------------------------------------------------------
 
-MAX_EXPECTED_MINOR = 10_000_000
+PRICE_CONFIRM_MAX_FACTOR = 2     # a confirmed price may be at most 2x the price the group voted on
+ADMIN_MAX_FAILS = 5              # wrong admin tokens per client per hour before 429
 
 
 def _cart_context(request, deps, plan_id):
@@ -766,6 +767,15 @@ def _render_cart(request, plan_id, plan, result, tal, win, view):
         can_create=bool(view.missing) and not view.unavailable and view.new_price_minor is None)
 
 
+def _cart_busy(request):
+    return render(request, "error.html", 429, title="Cart link already being prepared",
+                  message="Cart link already being prepared. Refresh in a few seconds.")
+
+
+def _cart_ok(view) -> bool:
+    return view.new_price_minor is None and not view.unavailable and not view.error
+
+
 def _cart_unavailable(request, exc):
     log.warning("cart failed: %s status=%s", type(exc).__name__, getattr(exc, "status", None))
     return render(request, "error.html", 502, title="The cart is unavailable",
@@ -777,8 +787,10 @@ def _cart_unavailable(request, exc):
 def cart_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     """Shows the carts that already work (re-read from Groupon now). Never creates one."""
     plan, result, tal, win = _cart_context(request, deps, plan_id)
+    accepted = deps.store.get_accepted_price(plan_id, win.candidate.option_id)
     try:
-        view = make_carts(deps.ls, deps.store, win, plan_id, now=deps.now(), create=False)
+        view = make_carts(deps.ls, deps.store, win, plan_id, accepted, deps.now(), create=False,
+                          confirmed=accepted is not None)
     except PlanNotFound:
         raise
     except Exception as exc:   # LsApiError, a missing key, a network failure: say none of it
@@ -792,19 +804,25 @@ def cart_create(plan_id: str, request: Request, form: dict = Depends(read_form),
     named = form.get("product_id", "")
     if named and named != win.candidate.product_id:
         raise refuse(403, "Only the option the group picked can be put in a cart.")
-    expected = None
+    posted = None
     raw = form.get("expected_minor", "").strip()
     if raw:
         try:
-            expected = int(raw)
+            posted = int(raw)
         except ValueError:
-            expected = 0
-        if not 1 <= expected <= MAX_EXPECTED_MINOR:
-            raise refuse(400, "That price could not be read.", "Bad request")
+            posted = 0
+        if not 1 <= posted <= PRICE_CONFIRM_MAX_FACTOR * win.candidate.price_minor:
+            raise refuse(400, "That price could not be accepted.", "Bad request")
+    store = deps.store
+    expected = posted if posted is not None else store.get_accepted_price(plan_id, win.candidate.option_id)
     try:
-        view = make_carts(deps.ls, deps.store, win, plan_id, expected, deps.now())
+        view = make_carts(deps.ls, store, win, plan_id, expected, deps.now(), confirmed=expected is not None)
+        if posted is not None and _cart_ok(view):
+            store.set_accepted_price(plan_id, win.candidate.option_id, posted)
     except PlanNotFound:
         raise
+    except CartBusy:
+        return _cart_busy(request)
     except Exception as exc:
         return _cart_unavailable(request, exc)
     return _render_cart(request, plan_id, plan, result, tal, win, view)
@@ -818,8 +836,17 @@ def admin_carts(request: Request, deps: Deps = Depends(get_deps)):
     token = os.environ.get("ADMIN_TOKEN", "")
     if not token:
         raise HTTPException(status_code=404)
+    try:
+        ip_hash = hash_ip(client_ip(request))
+    except RuntimeError:
+        return render(request, "error.html", 503, title="Not ready",
+                      message="This site is not fully configured yet. Please try again later.")
+    now = deps.now()
+    if deps.store.admin_failures(ip_hash, now) >= ADMIN_MAX_FAILS:
+        return Response("Too many wrong tokens. Try again later.\n", status_code=429, media_type="text/plain")
     given = request.headers.get("x-admin-token", "")
     if not hmac.compare_digest(given.encode("utf8"), token.encode("utf8")):
+        deps.store.note_admin_failure(ip_hash, now)
         return Response("Forbidden\n", status_code=403, media_type="text/plain")
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")

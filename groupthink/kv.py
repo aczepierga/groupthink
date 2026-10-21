@@ -75,6 +75,12 @@ class Kv:
     def decr(self, key):
         return self._command("DECR", key)
 
+    def incrby(self, key, n):
+        return self._command("INCRBY", key, int(n))
+
+    def decrby(self, key, n):
+        return self._command("DECRBY", key, int(n))
+
     def expire(self, key, seconds):
         return bool(self._command("EXPIRE", key, int(seconds)))
 
