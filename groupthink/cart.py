@@ -109,10 +109,13 @@ def _safe_link(cart: dict) -> str | None:
     return link if parts.scheme == "https" and parts.hostname else None
 
 
-def _plain_message(ranked: Ranked, n: int) -> str | None:
+def _plain_message(ranked: Ranked, n: int, solo: bool = False) -> str | None:
     if n <= 1:
         return None
     limit = ranked.candidate.facts.limit_per_person
+    if solo:
+        return ("You need %d vouchers and the fine print limits each checkout to %d per person, so this "
+                "takes %d separate checkouts. You pay on each." % (ranked.quantity, limit, n))
     return ("Your group needs %d vouchers and the fine print limits each checkout to %d per person, so this "
             "takes %d separate checkouts. One person pays on each." % (ranked.quantity, limit, n))
 
@@ -134,7 +137,7 @@ def make_carts(client, store, ranked: Ranked, plan_id: str, expected_price_minor
 
     def view(links=(), total=0, **kw):
         return CartView(links=list(links), quantity=ranked.quantity, total_minor=total,
-                        checkouts_needed=n_needed, message=kw.pop("message", _plain_message(ranked, n_needed)),
+                        checkouts_needed=n_needed, message=kw.pop("message", _plain_message(ranked, n_needed, solo)),
                         unit_minor=kw.pop("unit_minor", expected), precision=c.precision, **kw)
 
     def price_changed(new):

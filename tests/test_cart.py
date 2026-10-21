@@ -851,3 +851,17 @@ def test_impossible_split_message_has_solo_variant_and_group_text_unchanged():
     solo = make_carts(None, None, ranked, "p", solo=True).error
     assert group.endswith("Ask the group to vote for another option.")
     assert "choose another option" in solo and not solo_words(solo)
+
+
+def test_plain_message_group_unchanged_and_solo_variant():
+    from groupthink.cart import _plain_message
+    ranked = ranked_for(3, 2)
+    assert _plain_message(ranked, 2) == (
+        "Your group needs 3 vouchers and the fine print limits each checkout to 2 per person, so this "
+        "takes 2 separate checkouts. One person pays on each.")
+    assert _plain_message(ranked, 2, solo=False) == _plain_message(ranked, 2)
+    solo = _plain_message(ranked, 2, solo=True)
+    assert solo == ("You need 3 vouchers and the fine print limits each checkout to 2 per person, so this "
+                    "takes 2 separate checkouts. You pay on each.")
+    assert not solo_words(solo)
+    assert _plain_message(ranked, 1, solo=True) is None
