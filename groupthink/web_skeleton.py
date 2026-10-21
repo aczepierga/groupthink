@@ -1,8 +1,9 @@
-"""Deployable skeleton: home page, health check and hosting probes.
+"""The deployed app: health check, hosting probes, and the Argue flow (groupthink.web).
 
-Real app routes arrive in Task 8. The /_probe/* routes exist to learn what the
-host does (client IP headers, egress, cookies, KV) and are 404 unless the env
-var PROBES_ENABLED is exactly "1". No probe ever returns a secret value.
+The /_probe/* routes exist to learn what the host does (client IP headers, egress,
+cookies, KV) and are 404 unless the env var PROBES_ENABLED is exactly "1". No probe
+ever returns a secret value. Tests inject store / ls_client / now into create_app;
+in production they are built on first use (DurableStore when Upstash env is set).
 """
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from . import config
+from . import config, web
 from .kv import Kv, KvError
 from .ls_client import urllib_transport
 
@@ -29,16 +30,13 @@ def _probes_enabled():
         raise HTTPException(status_code=404)
 
 
-def create_app(kv_factory=Kv.from_env, egress_transport=urllib_transport):
+def create_app(kv_factory=Kv.from_env, egress_transport=urllib_transport, store=None, ls_client=None,
+               now=None):
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(ROOT / "templates")),
                              autoescape=jinja2.select_autoescape(["html"]))
     templates = Jinja2Templates(env=env)
     app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
-
-    @app.get("/")
-    def home(request: Request):
-        return templates.TemplateResponse(request, "home.html")
 
     @app.get("/healthz")
     def healthz():
@@ -87,6 +85,7 @@ def create_app(kv_factory=Kv.from_env, egress_transport=urllib_transport):
         return {"set": bool(value), "len": len(value)}
 
     app.include_router(probes)
+    web.register(app, templates, web.Deps(store=store, ls_client=ls_client, now=now))
     return app
 
 

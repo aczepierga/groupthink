@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}GroupThink: limit reached{% endblock %}
+{% block content %}
+<h1>Limit reached</h1>
+{% if kind == "runs" %}
+  <p>This plan has already argued twice, which is the limit (two runs per plan). Start a new plan to argue again.</p>
+{% else %}
+  <p>Too many plans have been started from your network today, or the site is at its daily cap. Please try again tomorrow.</p>
+{% endif %}
+<p><a class="button" href="/">Back to the start</a></p>
+{% endblock %}

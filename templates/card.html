@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}GroupThink: your card{% endblock %}
+{% block content %}
+<h1>Your card</h1>
+<p><a href="/p/{{ plan_id }}">Back to the plan</a></p>
+{% if full %}
+  <p class="error" role="alert">This plan already has all {{ plan.group_size }} cards, so it is full.</p>
+{% else %}
+  <p>Private: only you see this card. Your bot argues in general terms ("over my budget") unless you tick "say my numbers".</p>
+  {% if saved %}<p class="notice" role="status">Saved. You can edit your card until the host starts the argument, and again if the group relaxes a rule.</p>{% endif %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if relax_word %}
+  <form method="post" action="/p/{{ plan_id }}/relax" class="stack callout">
+    <p>The last run found nothing because of your hard no: <strong>{{ relax_word }}</strong>. Only you can drop it.</p>
+    <input type="hidden" name="drop" value="hard_no:{{ relax_word }}">
+    <button type="submit" class="secondary">Drop this hard no</button>
+  </form>
+  {% endif %}
+  <form method="post" action="/p/{{ plan_id }}/card" class="stack">
+    <label for="name">Your name</label>
+    <input id="name" name="name" type="text" maxlength="40" required value="{{ values.name }}" autocomplete="off">
+    <label for="budget">Max you will spend per person, in dollars</label>
+    <input id="budget" name="budget" type="text" inputmode="decimal" required placeholder="40" value="{{ values.budget }}">
+    <label for="likes">What you like (separate with commas)</label>
+    <input id="likes" name="likes" type="text" placeholder="pottery, tacos, live music" value="{{ values.likes }}">
+    <label for="hard_nos">Hard no's (separate with commas)</label>
+    <input id="hard_nos" name="hard_nos" type="text" placeholder="karaoke, heights" value="{{ values.hard_nos }}">
+    <label for="constraints">Anything else (kids, diet, mobility)</label>
+    <textarea id="constraints" name="constraints" rows="3" maxlength="280">{{ values.constraints }}</textarea>
+    <label class="check"><input type="checkbox" name="kids"{% if values.kids %} checked{% endif %}> There will be kids with us</label>
+    <label class="check"><input type="checkbox" name="share_numbers"{% if values.share_numbers %} checked{% endif %}> Let my bot say my numbers (my budget and by how much an offer is over it)</label>
+    <button type="submit">Save my card</button>
+  </form>
+{% endif %}
+{% endblock %}

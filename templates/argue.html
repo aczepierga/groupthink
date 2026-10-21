@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}GroupThink: the argument{% endblock %}
+{% block content %}
+<h1>The argument</h1>
+<p class="muted">{{ plan.city }}, {{ plan.date_text }}. <a href="/p/{{ plan_id }}">Back to the plan</a></p>
+
+<section aria-labelledby="debate-h">
+  <h2 id="debate-h">What the bots say</h2>
+  <ol id="debate" class="debate" aria-live="polite"></ol>
+  <template id="debate-lines">
+    {% for ln in lines %}<li class="line {{ ln.kind }}"><span class="who">{{ ln.speaker }}</span><span class="say">{{ ln.text }}</span></li>
+    {% endfor %}
+  </template>
+  <noscript>
+    <ol class="debate">
+      {% for ln in lines %}<li class="line {{ ln.kind }}"><span class="who">{{ ln.speaker }}</span><span class="say">{{ ln.text }}</span></li>
+      {% endfor %}
+    </ol>
+  </noscript>
+  <p><button type="button" id="skip-debate" class="secondary">Skip to the picks</button></p>
+</section>
+
+<section id="results" class="results pending" aria-labelledby="results-h">
+  <h2 id="results-h">The picks</h2>
+  {% include "_copy.html" %}
+
+  {% if thin %}
+  <p class="callout">{{ thin.note }}
+    {% if thin.nearby %}Try a nearby city instead:
+      {% for n in thin.nearby %}<a href="/?city={{ n|urlencode }}">{{ n }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
+    {% else %}Try a larger nearby city instead.{% endif %}
+  </p>
+  {% endif %}
+
+  {% if empty %}
+  <div class="callout" role="status">
+    {% if empty.kind == "budget" %}
+      <p><strong>No offer fits everyone's budget.</strong>
+      {% if empty.cheapest %}The cheapest option is {{ empty.cheapest.spend }} per person ({{ empty.cheapest.title }}).{% endif %}</p>
+      {% if host %}
+      <form method="post" action="/p/{{ plan_id }}/relax">
+        <input type="hidden" name="drop" value="budget">
+        <button type="submit">Show me what it would take</button>
+      </form>
+      {% else %}<p>The host can see what it would take. Members can raise their own budget on their own card.</p>{% endif %}
+    {% elif empty.kind == "hard_no" %}
+      <p><strong>Every offer was ruled out by a hard no: {{ empty.word }}.</strong> Nothing was relaxed.</p>
+      {% if host %}
+      <form method="post" action="/p/{{ plan_id }}/relax">
+        <input type="hidden" name="drop" value="hard_no:{{ empty.word }}">
+        <button type="submit">Drop this hard no</button>
+      </form>
+      <p class="muted">Only the member who set it can drop it, from their own browser. Their card page has the button.</p>
+      {% else %}<p>Only the member who set it can drop it, from their own card page.</p>{% endif %}
+    {% elif empty.kind == "kids_21" %}
+      <p><strong>Every offer left is 21 and over, and there are kids in the group.</strong> Nothing was relaxed.</p>
+    {% elif empty.kind == "quantity" %}
+      <p><strong>Every offer left cannot be bought in the quantity your group needs.</strong> Nothing was relaxed.</p>
+    {% else %}
+      <p><strong>No offers were found for this plan.</strong> Nothing was padded in.</p>
+    {% endif %}
+    {% if runs < max_runs and host %}<p class="muted">After a change, press "Let them argue" on the plan page again (run {{ runs + 1 }} of {{ max_runs }}).</p>{% endif %}
+  </div>
+  {% endif %}
+
+  {% if winner %}
+  <p class="winner" data-winner="{{ winner.product_id }}" data-final="{{ 'yes' if final else 'no' }}">{% if final %}The group picked{% else %}Leading so far{% endif %}: {{ winner.title }} <span class="muted">({{ reason }})</span></p>
+  {% if final %}<p class="muted">The cart link comes next. Remember the voucher does not book a date or time.</p>
+  {% else %}<p class="muted">Waiting for the rest of the group to vote.</p>{% endif %}
+  {% elif offers %}
+  <p class="muted">Vote for one. No votes yet, no winner yet.</p>
+  {% endif %}
+
+  {% for o in offers %}
+  <article class="offer" data-product="{{ o.product_id }}">
+    <h3>{{ o.title }}</h3>
+    {% if o.option_title %}<p class="muted">Option: {{ o.option_title }}</p>{% endif %}
+    <p class="price"><span class="now">{{ o.price }}</span>{% if o.original %} <s>{{ o.original }}</s>{% endif %} per voucher</p>
+    {% if o.original_unknown %}<p class="muted">Original price: unknown</p>{% endif %}
+    <p>{{ o.place }}</p>
+    <p>{{ o.quantity }} {{ o.party }}</p>
+    <h4>Fine print</h4>
+    {% if o.fine_print is none %}
+      <p>Fine print: unknown, check the deal page</p>
+    {% elif o.fine_print %}
+      <ul>{% for f in o.fine_print %}<li>{{ f }}</li>{% endfor %}</ul>
+    {% else %}
+      <p>Fine print: none listed on the offer</p>
+    {% endif %}
+    <h4>Why it fits everyone</h4>
+    <ul>{% for w in o.why %}<li>{{ w }}</li>{% endfor %}</ul>
+    {% if o.warnings %}
+    <h4>Heads up</h4>
+    <ul>{% for w in o.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if o.promo %}<p>Code {{ o.promo }} may lower the price</p>{% endif %}
+    <p>{% if o.voucher_until %}Voucher valid until {{ o.voucher_until }}{% else %}Voucher valid until: unknown{% endif %}</p>
+    <p class="votes">{{ o.votes }}</p>
+    {% if can_vote %}
+    <form method="post" action="/p/{{ plan_id }}/vote">
+      <input type="hidden" name="product_id" value="{{ o.product_id }}">
+      <button type="submit">Vote for this one</button>
+    </form>
+    {% endif %}
+    {% if can_pick and o.product_id in leaders %}
+    <form method="post" action="/p/{{ plan_id }}/pick">
+      <input type="hidden" name="product_id" value="{{ o.product_id }}">
+      <button type="submit" class="secondary">Host pick: break the tie with this one</button>
+    </form>
+    {% endif %}
+  </article>
+  {% endfor %}
+  {% if offers and not can_vote %}<p class="muted">To vote, open your own card from the link you were sent, then come back here.</p>{% endif %}
+</section>
+{% endblock %}

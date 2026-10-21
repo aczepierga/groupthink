@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}GroupThink: your plan{% endblock %}
+{% block content %}
+<h1>Your group plan</h1>
+<dl class="facts">
+  <dt>City</dt><dd>{{ plan.city }}</dd>
+  <dt>When</dt><dd>{{ plan.date_text }} (a wish, not a booking)</dd>
+  <dt>Group size</dt><dd>{{ plan.group_size }}</dd>
+  {% if plan.theme %}<dt>Theme</dt><dd>{{ plan.theme }}</dd>{% endif %}
+  <dt>Cards in</dt><dd>{{ cards_in }} of {{ plan.group_size }}{% if names %}: {{ names|join(", ") }}{% endif %}</dd>
+</dl>
+
+<section aria-labelledby="share-h">
+  <h2 id="share-h">1. Share this link</h2>
+  <p>Send it to everyone in the group. Each person fills in a private card.</p>
+  <div class="copyrow">
+    <input id="share-url" type="text" readonly value="{{ share_url }}" aria-label="Plan link">
+    <button type="button" class="secondary" data-copy="share-url">Copy link</button>
+  </div>
+</section>
+
+<section aria-labelledby="card-h">
+  <h2 id="card-h">2. Fill in your card</h2>
+  <p>Only you see your card. Other members and the bots' lines never show your answers unless you tick "say my numbers".</p>
+  {% if me %}
+    <p><a class="button" href="/p/{{ plan_id }}/card">Edit my card</a></p>
+  {% elif full %}
+    <p>This plan already has all {{ plan.group_size }} cards.</p>
+  {% else %}
+    <p><a class="button" href="/p/{{ plan_id }}/card">Fill in my card</a></p>
+  {% endif %}
+</section>
+
+<section aria-labelledby="argue-h">
+  <h2 id="argue-h">3. The argument</h2>
+  {% if host %}
+    {% if runs >= max_runs %}
+      <p>The bots have argued {{ max_runs }} times, which is the limit for one plan.</p>
+    {% elif cards_in == 0 %}
+      <p>Fill in at least one card, then start the argument.</p>
+    {% else %}
+      <p>{{ cards_in }} of {{ plan.group_size }} cards are in. The bots argue over the cards that are in right now.</p>
+      <form method="post" action="/p/{{ plan_id }}/argue">
+        <button type="submit">Let them argue</button>
+      </form>
+      <p class="muted">Run {{ runs + 1 }} of {{ max_runs }}. The search takes a few seconds.</p>
+    {% endif %}
+  {% else %}
+    <p>The host starts the argument when the cards are in.</p>
+  {% endif %}
+  {% if runs > 0 %}<p><a class="button secondary" href="/p/{{ plan_id }}/argue">See the argument</a></p>{% endif %}
+</section>
+{% include "_copy.html" %}
+{% endblock %}

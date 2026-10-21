@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}GroupThink: relax a rule{% endblock %}
+{% block content %}
+<h1>Relax a rule</h1>
+{% if kind == "budget" %}
+  <p>Nothing was changed. The cheapest option the bots found is <strong>{{ cheapest.spend }} per person</strong> ({{ cheapest.title }}).</p>
+  <p>Budgets are private, so only each member can raise their own. Ask the group: anyone who is happy to go up to that amount can change their number on their own card.</p>
+{% else %}
+  <p>Done. Your hard no <strong>{{ word }}</strong> was dropped from your card. Nothing else changed.</p>
+{% endif %}
+{% if host and runs_left > 0 %}
+  <p>When the cards are ready, the host presses "Let them argue" on the plan page again. {{ runs_left }} run{% if runs_left != 1 %}s{% endif %} left for this plan.</p>
+{% elif runs_left <= 0 %}
+  <p>This plan has used both of its runs. Start a new plan to argue again.</p>
+{% endif %}
+<p><a class="button" href="/p/{{ plan_id }}">Back to the plan</a></p>
+{% endblock %}
