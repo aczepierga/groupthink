@@ -13,7 +13,7 @@ import tempfile
 import threading
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
@@ -123,9 +123,37 @@ async def _plan_gone(request, exc):
     return render(request, "expired.html", 410)
 
 
+SECURITY_HEADERS = {
+    "Content-Security-Policy": ("default-src 'self'; img-src 'self' https: data:; frame-ancestors 'none'; "
+                                "base-uri 'none'; form-action 'self'"),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+}
+
+
+def cross_site(request: Request) -> bool:
+    """A POST that the browser says came from another site: Sec-Fetch-Site other than same-origin / none,
+    or an Origin whose host differs from the host this request was sent to."""
+    site = request.headers.get("sec-fetch-site")
+    if site is not None and site.strip().lower() not in ("same-origin", "none"):
+        return True
+    origin = request.headers.get("origin")
+    if origin is not None:
+        host = request.headers.get("x-forwarded-host", "").split(",")[0].strip() or request.headers.get("host", "")
+        if urlsplit(origin).netloc.lower() != host.lower():
+            return True
+    return False
+
+
 async def _housekeeping(request, call_next):
     deps = request.app.state.deps
     path = request.url.path
+    if request.method == "POST" and cross_site(request):
+        response = render(request, "error.html", 403, title="Not allowed",
+                          message="That request came from another site, so it was refused.")
+        for k, v in SECURITY_HEADERS.items():
+            response.headers[k] = v
+        return response
     if not path.startswith("/static/"):
         now = deps.now()
         if deps.purge_due(now):
@@ -136,6 +164,8 @@ async def _housekeeping(request, call_next):
     response = await call_next(request)
     if not path.startswith("/static/"):
         response.headers.setdefault("Cache-Control", "no-store")
+    for k, v in SECURITY_HEADERS.items():
+        response.headers[k] = v
     return response
 
 
@@ -323,9 +353,9 @@ def _relax_offer(store, plan_id, member):
     return None
 
 
-def _card_page(request, deps, plan_id, plan, cards, status=200, values=None, error=None):
+def _card_page(request, deps, plan_id, plan, cards, status=200, values=None, error=None, lost_seat=False):
     me = current_member(request, plan_id, cards)
-    full = me is None and len(cards) >= plan["group_size"]
+    full = me is None and (lost_seat or len(cards) >= plan["group_size"])
     return render(request, "card.html", status if not full else 409, plan_id=plan_id, plan=plan, me=me,
                   full=full, values=values or _card_values(me), error=error,
                   saved=request.query_params.get("saved") == "1",
@@ -356,9 +386,10 @@ def save_card(plan_id: str, request: Request, form: dict = Depends(read_form),
         return _card_page(request, deps, plan_id, plan, cards, 400, values,
                           "Budget must be a dollar amount from 1 to 100000.")
     member_id = me.id if me else secrets.token_urlsafe(12)
-    deps.store.put_card(plan_id, Member.clean(
-        member_id, values["name"], budget, split_words(values["likes"]), split_words(values["hard_nos"]),
-        values["kids"], values["constraints"], values["share_numbers"]))
+    if not deps.store.put_card(plan_id, Member.clean(
+            member_id, values["name"], budget, split_words(values["likes"]), split_words(values["hard_nos"]),
+            values["kids"], values["constraints"], values["share_numbers"]), cap=plan["group_size"]):
+        return _card_page(request, deps, plan_id, plan, deps.store.cards(plan_id), lost_seat=True)
     response = RedirectResponse("/p/%s/card?saved=1" % plan_id, status_code=303)
     if me is None:
         set_cookie(response, "m_" + plan_id, member_id)
@@ -376,24 +407,30 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     plan = load_plan(deps, plan_id)
     require_host(request, plan_id, plan)
     store = deps.store
-    runs = store.argue_count(plan_id)
-    if runs >= MAX_RUNS:
-        return render(request, "limit.html", 429, kind="runs")
     members = store.cards(plan_id)
     if not members:
         raise refuse(400, "Fill in at least one card first, then start the argument.", "No cards yet")
+    # Claim the run BEFORE the slow scout: a double click or a replayed POST cannot spend a third run.
+    run = store.claim_run(plan_id, MAX_RUNS)
+    if run is None:
+        return render(request, "limit.html", 429, kind="runs")
     try:
         found = scout(deps.ls, plan["city"], plan.get("theme", ""), max(m.max_budget_minor for m in members),
                       len(members), SCOUT_PATH)
     except Exception as exc:   # LsApiError, a missing key, a network failure: say none of it
+        store.release_run(plan_id)
         log.warning("scout failed: %s status=%s", type(exc).__name__, getattr(exc, "status", None))
         return render(request, "error.html", 502, title="Search is unavailable",
                       message="We could not reach LivingSocial just now. Nothing was changed and this did "
                               "not use up a run. Try again in a minute.")
-    result = rank(found.candidates, members)
-    result.adult_dropped = found.adult_dropped
-    lines = run_debate(result, members, _seed(plan_id, runs), deps.now().date())
-    store.save_result(plan_id, lines, result)
+    try:
+        result = rank(found.candidates, members)
+        result.adult_dropped = found.adult_dropped
+        lines = run_debate(result, members, _seed(plan_id, run - 1), deps.now().date())
+        store.save_result(plan_id, lines, result)
+    except Exception:
+        store.release_run(plan_id)
+        raise
     return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
 
 
@@ -435,8 +472,8 @@ def _warning_lines(r: Ranked) -> list[str]:
         if code == "limit_per_person":
             n = c.facts.limit_per_person
             line = "Fine print says limit %s per person." % n
-            if n is not None and r.quantity > n:
-                line += " Your group needs %d, so this takes separate checkouts." % r.quantity
+            if n and r.quantity > n:
+                line += " Your group needs %d, so this takes %d separate checkouts." % (r.quantity, -(-r.quantity // n))
             out.append(line)
         elif code == "may_cover_more":
             out.append("One voucher may already cover more than one person. Check the deal page before buying.")
@@ -444,8 +481,9 @@ def _warning_lines(r: Ranked) -> list[str]:
             out.append("Needs an appointment with the business after purchase.")
         elif code == "appointment_unknown":
             out.append("Appointment requirement: unknown.")
-        elif code == "age_unknown":
-            out.append("Age limit: unknown, and there are kids in the group.")
+    # age limit is a fact about the offer, shown the same way whoever is in the group
+    if c.facts.age_21 is None:
+        out.append("Age limit: unknown.")
     return out
 
 
@@ -528,13 +566,16 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     offers = [_offer_view(r, tal["counts"]) for r in result.top]
     winner = next((o for o in offers if o["product_id"] == tal["winner"]), None)
     host = is_host(request, plan_id, plan)
+    me = current_member(request, plan_id, cards)
+    empty = _empty_view(result)
+    owns_hard_no = bool(empty and empty["kind"] == "hard_no" and me and _has_word(me, empty["word"]))
     return render(
         request, "argue.html", plan_id=plan_id, plan=plan,
         lines=[{"speaker": ln.speaker, "kind": ln.kind, "text": ln.text} for ln in lines],
-        offers=offers, empty=_empty_view(result), thin=_thin_view(result, plan["city"]),
+        offers=offers, empty=empty, owns_hard_no=owns_hard_no, thin=_thin_view(result, plan["city"]),
         winner=winner, final=tal["final"], reason=tal["reason"], leaders=tal["leaders"], host=host,
         can_pick=host and tal["pickable"] and tal["best"] > 0 and len(tal["leaders"]) > 1,
-        can_vote=current_member(request, plan_id, cards) is not None,
+        can_vote=me is not None,
         runs=deps.store.argue_count(plan_id), max_runs=MAX_RUNS)
 
 

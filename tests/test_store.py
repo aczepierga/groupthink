@@ -102,9 +102,64 @@ def test_round_trip_result(be):
     got_lines, got_res = s.get_result(pid)
     assert got_lines == lines
     assert isinstance(got_res, RankResult) and got_res.to_dict() == res.to_dict()
-    assert s.argue_count(pid) == 1
+    assert s.argue_count(pid) == 0           # saving a result does not count a run; claim_run does
+    assert s.claim_run(pid) == 1 and s.claim_run(pid) == 2
     s.save_result(pid, lines, res)
     assert s.argue_count(pid) == 2
+
+
+def test_claim_run_is_capped(be):
+    s = be.store
+    pid = s.create_plan(plan())
+    assert s.claim_run(pid, 2) == 1
+    # two more claims at runs=1: exactly one succeeds
+    got = [s.claim_run(pid, 2), s.claim_run(pid, 2)]
+    assert sorted(g is None for g in got) == [False, True] and 2 in got
+    assert s.argue_count(pid) == 2
+    assert s.claim_run(pid, 2) is None and s.argue_count(pid) == 2
+
+
+def test_release_run_gives_the_claim_back(be):
+    s = be.store
+    pid = s.create_plan(plan())
+    assert s.claim_run(pid, 2) == 1 and s.claim_run(pid, 2) == 2 and s.claim_run(pid, 2) is None
+    s.release_run(pid)
+    assert s.argue_count(pid) == 1
+    assert s.claim_run(pid, 2) == 2
+    s.release_run(pid)
+    s.release_run(pid)
+    s.release_run(pid)                          # never below zero
+    assert s.argue_count(pid) == 0
+
+
+def test_claim_run_on_missing_plan_raises(be):
+    with pytest.raises(PlanNotFound):
+        be.store.claim_run("gone0000gone0000", 2)
+
+
+def test_rerun_clears_votes_and_pick(be):
+    s = be.store
+    pid = s.create_plan(plan())
+    s.save_result(pid, [Line("Scout", "scout", "x", None)], result())
+    s.put_vote(pid, "m1", "p1")
+    s.put_vote(pid, "m2", "p2")
+    s.set_pick(pid, "p1")
+    assert s.votes(pid) == {"p1": 1, "p2": 1} and s.get_pick(pid) == "p1"
+    s.save_result(pid, [Line("Scout", "scout", "y", None)], result())
+    assert s.votes(pid) == {} and s.get_pick(pid) is None
+    assert s.get_result(pid)[0][0].text == "y"
+    s.put_vote(pid, "m1", "p1")                 # voting works again afterwards
+    assert s.votes(pid) == {"p1": 1}
+
+
+def test_put_card_cap_refuses_new_member_only(be):
+    s = be.store
+    pid = s.create_plan(plan())
+    assert s.put_card(pid, mem("m1"), cap=2) is True
+    assert s.put_card(pid, mem("m2"), cap=2) is True
+    assert s.put_card(pid, mem("m3"), cap=2) is False
+    assert s.put_card(pid, mem("m1", cap=7000), cap=2) is True      # editing an existing card is fine
+    assert {m.id: m.max_budget_minor for m in s.cards(pid)} == {"m1": 7000, "m2": 5000}
 
 
 def test_card_overwrite_same_member(be):
@@ -229,6 +284,7 @@ def test_durable_key_layout_and_ttl():
     s.save_result(pid, [Line("Scout", "scout", "x", None)], result())
     s.put_vote(pid, "m1", "p1")
     s.set_pick(pid, "p1")
+    s.claim_run(pid)
     s.record_cart(pid, "p1", "o1", "cart-a", now().isoformat())
     keys = fake.keys()
     assert keys and all(k.startswith("gt:") for k in keys)

@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
@@ -47,11 +48,13 @@ class PlanNotFound(Exception):
 class Store(Protocol):
     def create_plan(self, plan: dict) -> str: ...
     def get_plan(self, plan_id: str) -> dict | None: ...
-    def put_card(self, plan_id: str, member: Member) -> None: ...
+    def put_card(self, plan_id: str, member: Member, cap: int | None = None) -> bool: ...
     def cards(self, plan_id: str) -> list[Member]: ...
     def save_result(self, plan_id: str, lines: list[Line], result: RankResult) -> None: ...
     def get_result(self, plan_id: str) -> tuple[list[Line], RankResult] | None: ...
     def argue_count(self, plan_id: str) -> int: ...
+    def claim_run(self, plan_id: str, cap: int = 2) -> int | None: ...
+    def release_run(self, plan_id: str) -> None: ...
     def put_vote(self, plan_id: str, member_id: str, product_id: str) -> None: ...
     def votes(self, plan_id: str) -> dict[str, int]: ...
     def set_pick(self, plan_id: str, product_id: str) -> None: ...
@@ -69,12 +72,13 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, ip_hash TEXT, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cards (plan_id TEXT, member_id TEXT, body TEXT NOT NULL, PRIMARY KEY (plan_id, member_id));
 CREATE TABLE IF NOT EXISTS results (plan_id TEXT PRIMARY KEY, body TEXT NOT NULL, argues INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS runs (plan_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS votes (plan_id TEXT, member_id TEXT, product_id TEXT NOT NULL, PRIMARY KEY (plan_id, member_id));
 CREATE TABLE IF NOT EXISTS picks (plan_id TEXT PRIMARY KEY, product_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS carts (seq INTEGER PRIMARY KEY AUTOINCREMENT, plan_id TEXT NOT NULL, product_id TEXT,
   option_id TEXT NOT NULL, cart_id TEXT NOT NULL, created_at TEXT, UNIQUE (plan_id, option_id, cart_id));
 """
-_CHILDREN = ("cards", "results", "votes", "picks", "carts")
+_CHILDREN = ("cards", "results", "runs", "votes", "picks", "carts")
 
 
 class SqliteStore:
@@ -83,6 +87,7 @@ class SqliteStore:
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.executescript(_SCHEMA)
         self._db.commit()
+        self._lock = threading.RLock()   # check-then-write sequences below are atomic per process
 
     def create_plan(self, plan: dict) -> str:
         plan = dict(plan)
@@ -108,23 +113,36 @@ class SqliteStore:
             return {"expired": True}
         return json.loads(row[1])
 
-    def put_card(self, plan_id, member):
+    def put_card(self, plan_id, member, cap=None):
+        """Insert or replace a card. With `cap`, a NEW member is refused (False) when the plan is full."""
         self._require_plan(plan_id)
-        self._db.execute("INSERT OR REPLACE INTO cards VALUES (?,?,?)",
-                         (plan_id, member.id, json.dumps(member.to_dict())))
-        self._db.commit()
+        with self._lock:
+            if cap is not None:
+                known = self._db.execute("SELECT 1 FROM cards WHERE plan_id=? AND member_id=?",
+                                         (plan_id, member.id)).fetchone()
+                n = self._db.execute("SELECT COUNT(*) FROM cards WHERE plan_id=?", (plan_id,)).fetchone()[0]
+                if known is None and n >= cap:
+                    return False
+            self._db.execute("INSERT OR REPLACE INTO cards VALUES (?,?,?)",
+                             (plan_id, member.id, json.dumps(member.to_dict())))
+            self._db.commit()
+        return True
 
     def cards(self, plan_id):
         rows = self._db.execute("SELECT body FROM cards WHERE plan_id=? ORDER BY rowid", (plan_id,))
         return [Member.from_dict(json.loads(r[0])) for r in rows]
 
     def save_result(self, plan_id, lines, result):
+        """Store a run's result. A new result resets the vote: votes and pick belong to the old top options."""
         self._require_plan(plan_id)
         body = json.dumps({"lines": [ln.to_dict() for ln in lines], "result": result.to_dict()})
-        self._db.execute(
-            "INSERT INTO results VALUES (?,?,1) ON CONFLICT(plan_id) DO UPDATE SET body=excluded.body, argues=argues+1",
-            (plan_id, body))
-        self._db.commit()
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO results VALUES (?,?,0) ON CONFLICT(plan_id) DO UPDATE SET body=excluded.body",
+                (plan_id, body))
+            self._db.execute("DELETE FROM votes WHERE plan_id=?", (plan_id,))
+            self._db.execute("DELETE FROM picks WHERE plan_id=?", (plan_id,))
+            self._db.commit()
 
     def get_result(self, plan_id):
         row = self._db.execute("SELECT body FROM results WHERE plan_id=?", (plan_id,)).fetchone()
@@ -134,8 +152,25 @@ class SqliteStore:
         return [Line.from_dict(x) for x in d["lines"]], RankResult.from_dict(d["result"])
 
     def argue_count(self, plan_id):
-        row = self._db.execute("SELECT argues FROM results WHERE plan_id=?", (plan_id,)).fetchone()
+        row = self._db.execute("SELECT n FROM runs WHERE plan_id=?", (plan_id,)).fetchone()
         return row[0] if row else 0
+
+    def claim_run(self, plan_id, cap=2):
+        """Atomically take one of the plan's `cap` /argue runs; None when none is left."""
+        self._require_plan(plan_id)
+        with self._lock:
+            self._db.execute("INSERT OR IGNORE INTO runs VALUES (?,0)", (plan_id,))
+            cur = self._db.execute("UPDATE runs SET n=n+1 WHERE plan_id=? AND n<?", (plan_id, cap))
+            self._db.commit()
+            if cur.rowcount == 0:
+                return None
+            return self._db.execute("SELECT n FROM runs WHERE plan_id=?", (plan_id,)).fetchone()[0]
+
+    def release_run(self, plan_id):
+        """Give a claimed run back (the run failed before producing a result)."""
+        with self._lock:
+            self._db.execute("UPDATE runs SET n=n-1 WHERE plan_id=? AND n>0", (plan_id,))
+            self._db.commit()
 
     def put_vote(self, plan_id, member_id, product_id):
         self._require_plan(plan_id)

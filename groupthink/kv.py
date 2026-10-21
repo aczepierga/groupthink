@@ -72,6 +72,9 @@ class Kv:
     def incr(self, key):
         return self._command("INCR", key)
 
+    def decr(self, key):
+        return self._command("DECR", key)
+
     def expire(self, key, seconds):
         return bool(self._command("EXPIRE", key, int(seconds)))
 
@@ -125,6 +128,12 @@ class Kv:
 
     def hset(self, key, field, value):
         return self._command("HSET", key, field, value)
+
+    def hlen(self, key):
+        return int(self._command("HLEN", key) or 0)
+
+    def hdel(self, key, field):
+        return self._command("HDEL", key, field)
 
     def hgetall(self, key):
         """Upstash returns a flat [field, value, ...] list; fold it to a dict."""

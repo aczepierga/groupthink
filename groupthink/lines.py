@@ -269,9 +269,9 @@ REFEREE_EMPTY = {
         "Hard no's cleared out most of the list and nothing is left. The host can relax them, then I rerun.",
     ],
     "kids_21": [
-        "An age limit ruled out most of what I found, and nothing is left. The host can relax that and I rerun.",
-        "Most of what I found has an age limit that rules out the group. The host can relax it and I go again.",
-        "Age limits cleared out most of the list and nothing is left. The host can relax them, then I rerun.",
+        "Some age-restricted offers were left out so the plan suits everyone. The host can relax that and I rerun.",
+        "I skipped age-restricted offers so the plan suits everyone. The host can relax that and I go again.",
+        "Age-restricted offers were left out so the plan suits everyone. The host can relax that, then I rerun.",
     ],
     "quantity": [
         "Most offers lack enough vouchers for the group and none are left. The host can relax that and I rerun.",

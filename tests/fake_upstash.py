@@ -64,6 +64,13 @@ class FakeUpstash:
         if op == "INCR":
             d[args[0]] = str(int(d.get(args[0], "0")) + 1)
             return int(d[args[0]])
+        if op == "DECR":
+            d[args[0]] = str(int(d.get(args[0], "0")) - 1)
+            return int(d[args[0]])
+        if op == "HLEN":
+            return len(d.get(args[0], {}))
+        if op == "HDEL":
+            return 1 if d.get(args[0], {}).pop(args[1], None) is not None else 0
         if op in ("EXPIRE", "EXPIREAT"):
             if args[0] not in d:
                 return 0

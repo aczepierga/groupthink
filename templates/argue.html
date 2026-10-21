@@ -17,10 +17,10 @@
       {% endfor %}
     </ol>
   </noscript>
-  <p><button type="button" id="skip-debate" class="secondary">Skip to the picks</button></p>
+  <p><button type="button" id="skip-debate" class="secondary" hidden>Skip to the picks</button></p>
 </section>
 
-<section id="results" class="results pending" aria-labelledby="results-h">
+<section id="results" class="results" aria-labelledby="results-h">
   <h2 id="results-h">The picks</h2>
   {% include "_copy.html" %}
 
@@ -45,15 +45,14 @@
       {% else %}<p>The host can see what it would take. Members can raise their own budget on their own card.</p>{% endif %}
     {% elif empty.kind == "hard_no" %}
       <p><strong>Every offer was ruled out by a hard no: {{ empty.word }}.</strong> Nothing was relaxed.</p>
-      {% if host %}
+      {% if owns_hard_no %}
       <form method="post" action="/p/{{ plan_id }}/relax">
         <input type="hidden" name="drop" value="hard_no:{{ empty.word }}">
-        <button type="submit">Drop this hard no</button>
+        <button type="submit">Drop my hard no</button>
       </form>
-      <p class="muted">Only the member who set it can drop it, from their own browser. Their card page has the button.</p>
-      {% else %}<p>Only the member who set it can drop it, from their own card page.</p>{% endif %}
+      {% else %}<p>Only the member who set it can drop it, from their own browser. Nothing changes until they do.</p>{% endif %}
     {% elif empty.kind == "kids_21" %}
-      <p><strong>Every offer left is 21 and over, and there are kids in the group.</strong> Nothing was relaxed.</p>
+      <p><strong>Some 21+ offers were left out so the plan suits everyone.</strong> Nothing was relaxed.</p>
     {% elif empty.kind == "quantity" %}
       <p><strong>Every offer left cannot be bought in the quantity your group needs.</strong> Nothing was relaxed.</p>
     {% else %}

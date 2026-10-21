@@ -530,7 +530,7 @@ def test_empty_result_names_constraint_and_relax_form():
     assert 'class="offer"' not in t
     assert f'action="/p/{pid}/relax"' in t
     assert 'value="hard_no:karaoke"' in t
-    # only the host gets the form
+    # only the member who set it gets the button
     assert 'action="/p/%s/relax"' % pid not in bo.get(f"/p/{pid}/argue").text
     # nothing was relaxed behind the group's back
     assert env.store.cards(pid)[0].hard_nos == ["karaoke"]
@@ -723,7 +723,7 @@ def test_missing_plan_410_not_500(env):
 
 def test_store_plan_not_found_on_write_is_410():
     class Racy(SqliteStore):
-        def put_card(self, plan_id, member):
+        def put_card(self, plan_id, member, cap=None):
             raise PlanNotFound(plan_id)
 
         def set_pick(self, plan_id, product_id):
@@ -837,3 +837,197 @@ def test_healthz_and_probes_still_work(env, monkeypatch):
 def test_oversized_body_rejected(env):
     r = env.browser().post("/plans", data={"city": "Chicago", "date_text": "x" * 100000, "group_size": "3"})
     assert r.status_code == 413
+
+
+# ---- fix round 1 -----------------------------------------------------------------------------------
+
+def test_argue_double_submit_claims_once(env):
+    """A second POST that lands while the first is still scouting must not get the run too."""
+    pid, host, _ = group(env)
+    argue(host, pid)                              # run 1 of 2 done
+    inner = []
+    original = env.ls.search_partner
+
+    def slow_scout(q, city, max_price_dollars=None, limit=50):
+        if not inner:                             # the double click arrives mid-scout
+            inner.append(host.post(f"/p/{pid}/argue", follow_redirects=False))
+        return original(q, city, max_price_dollars, limit)
+
+    env.ls.search_partner = slow_scout
+    r = argue(host, pid)                          # run 2 claims the last run before it scouts
+    assert r.status_code == 303
+    assert inner[0].status_code == 429            # the duplicate is refused, not queued
+    assert env.store.argue_count(pid) == 2
+    assert len([c for c in env.ls.calls if c[0] == "partner"]) >= 1
+    argue(host, pid, expect=429)
+    assert env.store.argue_count(pid) == 2
+
+
+def test_argue_failed_scout_releases_run(env):
+    pid, host, _ = group(env)
+    argue(host, pid)
+    env.ls.error = LsApiError(503, message="down")
+    argue(host, pid, expect=502)
+    assert env.store.argue_count(pid) == 1        # the failed attempt gave its claim back
+    env.ls.error = OSError("dns")
+    argue(host, pid, expect=502)
+    assert env.store.argue_count(pid) == 1
+    env.ls.error = None
+    argue(host, pid)                              # the run is still available
+    assert env.store.argue_count(pid) == 2
+    argue(host, pid, expect=429)
+
+
+def test_rerun_clears_votes_and_pick(env):
+    pid, host, members = group(env)
+    argue(host, pid)
+    ranked = top_product_ids(env, pid)
+    members[0].post(f"/p/{pid}/vote", data={"product_id": ranked[0]})
+    members[1].post(f"/p/{pid}/vote", data={"product_id": ranked[1]})
+    host.post(f"/p/{pid}/pick", data={"product_id": ranked[1]})
+    assert env.store.get_pick(pid) == ranked[1]
+    argue(host, pid)
+    assert env.store.votes(pid) == {} and env.store.get_pick(pid) is None
+    t = host.get(f"/p/{pid}/argue").text
+    assert "The group picked" not in t and "Leading so far" not in t
+
+
+def kids_env():
+    return Env(ls=FakeLs(fine=("Must be 21+ to enter.",)))
+
+
+def test_no_kids_wording_anywhere():
+    # 1) offers left but one member has kids; 2) every offer is 21+ so the kids rule empties the list
+    for env in (Env(), kids_env()):
+        host = env.browser()
+        pid = new_plan(host, group_size="2")
+        card(host, pid, "Ann", "50", kids=True, constraints="two kids, one is 4")
+        bo = env.browser()
+        card(bo, pid, "Bo", "50")
+        argue(host, pid)
+        pages = [b.get(p).text for b in (host, bo, env.browser()) for p in (f"/p/{pid}", f"/p/{pid}/argue")]
+        for t in pages:
+            low = t.lower()
+            assert "kid" not in low and "child" not in low, low[low.find("kid") - 80:low.find("kid") + 80]
+    t = bo.get(f"/p/{pid}/argue").text
+    assert "Some 21+ offers were left out so the plan suits everyone." in t
+
+
+def test_security_headers(env):
+    c = env.browser()
+    pid = new_plan(c)
+    paths = ["/", f"/p/{pid}", f"/p/{pid}/card", f"/p/{pid}/argue", "/healthz", "/static/style.css",
+             "/p/gone0000gone0000"]
+    for path in paths:
+        r = c.get(path, follow_redirects=False)
+        csp = r.headers["content-security-policy"]
+        for part in ("default-src 'self'", "img-src 'self' https: data:", "frame-ancestors 'none'",
+                     "base-uri 'none'", "form-action 'self'"):
+            assert part in csp, (path, csp)
+        assert r.headers["x-content-type-options"] == "nosniff", path
+        assert r.headers["referrer-policy"] == "same-origin", path
+    bad = c.post("/plans", data={}, headers={"sec-fetch-site": "cross-site"})
+    assert bad.status_code == 403 and "content-security-policy" in bad.headers
+
+
+@pytest.mark.parametrize("headers", [{"sec-fetch-site": "cross-site"}, {"sec-fetch-site": "same-site"},
+                                     {"origin": "https://evil.example"}, {"origin": "null"},
+                                     {"sec-fetch-site": "same-origin", "origin": "https://evil.example"}])
+def test_cross_site_plan_post_rejected(env, headers):
+    c = env.browser()
+    form = {"city": "Chicago", "date_text": "Sat", "group_size": "3", "theme": ""}
+    r = c.post("/plans", data=form, headers=headers, follow_redirects=False)
+    assert r.status_code == 403
+    assert env.store.count_all_plans(T0 - timedelta(days=1)) == 0
+    pid = new_plan(c)
+    r = env.browser().post(f"/p/{pid}/card", data={"name": "X", "budget": "5"}, headers=headers,
+                           follow_redirects=False)
+    assert r.status_code == 403 and env.store.cards(pid) == []
+
+
+@pytest.mark.parametrize("headers", [{}, {"sec-fetch-site": "same-origin"}, {"sec-fetch-site": "none"},
+                                     {"origin": "https://testserver"},
+                                     {"origin": "https://app.example", "x-forwarded-host": "app.example"}])
+def test_same_origin_posts_allowed(env, headers):
+    form = {"city": "Chicago", "date_text": "Sat", "group_size": "3", "theme": ""}
+    r = env.browser().post("/plans", data=form, headers=headers, follow_redirects=False)
+    assert r.status_code == 303
+
+
+def test_pick_rejects_zero_vote_product_but_allows_when_no_votes(env):
+    pid, host, members = group(env)
+    argue(host, pid)
+    a, b, c3 = top_product_ids(env, pid)
+    # no votes at all: the host may pick any of the top options
+    assert host.post(f"/p/{pid}/pick", data={"product_id": c3}, follow_redirects=False).status_code == 303
+    members[0].post(f"/p/{pid}/vote", data={"product_id": a})
+    members[1].post(f"/p/{pid}/vote", data={"product_id": b})
+    # votes exist: a product with 0 votes is refused, a tied one is accepted
+    assert host.post(f"/p/{pid}/pick", data={"product_id": c3}).status_code == 400
+    assert host.post(f"/p/{pid}/pick", data={"product_id": b}, follow_redirects=False).status_code == 303
+    assert env.store.get_pick(pid) == b
+    # and a clear leader cannot be overridden
+    host.post(f"/p/{pid}/vote", data={"product_id": a})
+    assert host.post(f"/p/{pid}/pick", data={"product_id": b}).status_code == 400
+
+
+def test_drop_hard_no_button_only_for_owner():
+    env = karaoke_env()
+    host = env.browser()
+    pid = new_plan(host, group_size="2")
+    card(host, pid, "Ann", "50")
+    bo = env.browser()
+    card(bo, pid, "Bo", "50", hard_nos="karaoke")
+    argue(host, pid)
+    form = f'action="/p/{pid}/relax"'
+    assert form not in host.get(f"/p/{pid}/argue").text
+    assert form not in env.browser().get(f"/p/{pid}/argue").text
+    owner = bo.get(f"/p/{pid}/argue").text
+    assert form in owner and 'value="hard_no:karaoke"' in owner
+    assert "karaoke" in host.get(f"/p/{pid}/argue").text      # the constraint is still named
+
+
+def test_results_visible_without_js_or_when_script_fails(env):
+    pid, host, _ = group(env)
+    argue(host, pid)
+    html = host.get(f"/p/{pid}/argue").text
+    results_tag = re.search(r'<section id="results"[^>]*>', html).group(0)
+    assert "pending" not in results_tag and "hidden" not in results_tag and "display" not in results_tag
+    assert re.search(r"<noscript>.*?class=\"line", html, re.S)            # lines also visible without JS
+    assert re.search(r'id="skip-debate"[^>]*\bhidden\b', html)             # a dead button is not shown
+    js = host.get("/static/reveal.js").text
+    css = host.get("/static/style.css").text
+    # the page hides the picks only from script, only when the template API exists, and un-hides on any error
+    assert 'results.classList.add("pending")' in js and "catch" in js
+    assert js.count('classList.remove("pending")') >= 1 and "tpl.content" in js
+    assert ".results.pending" in css and "display: none" in css
+    assert not re.search(r"(?m)^\.results\s*\{[^}]*display:\s*none", css)   # never hidden by default
+
+
+def test_limit_warning_counts_separate_checkouts():
+    hit = p_hit("p1", "Pottery Wheel Night", 3000)
+    env = Env(ls=FakeLs(hits=[hit], fine=("Limit 2 per person.",)))
+    pid, host, _ = group(env)                        # a group of 3 needs 3 vouchers, limit 2 each
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "Your group needs 3, so this takes 2 separate checkouts." in t
+    env = Env(ls=FakeLs(hits=[hit], fine=("Limit 1 per person.",)))
+    pid, host, _ = group(env)
+    argue(host, pid)
+    assert "Your group needs 3, so this takes 3 separate checkouts." in host.get(f"/p/{pid}/argue").text
+
+
+def test_card_cap_is_enforced_by_the_store():
+    class LastSeat(SqliteStore):
+        """Plan looked open to the route, but the store says the last seat just went."""
+
+        def put_card(self, plan_id, member, cap=None):
+            assert cap == 2
+            return False
+
+    env = Env(store=LastSeat(":memory:"))
+    c = env.browser()
+    pid = new_plan(c, group_size="2")
+    r = c.post(f"/p/{pid}/card", data={"name": "Ann", "budget": "50"}, follow_redirects=False)
+    assert r.status_code == 409 and "full" in r.text.lower()
+    assert "m_" + pid not in c.cookies

@@ -41,8 +41,8 @@ dl.facts dd { margin: 0; }
 .debate .scout .who, .debate .referee .who { color: var(--green); }
 .js .debate li { animation: pop 0.3s ease; }
 @keyframes pop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-/* hidden only once reveal.js has marked the page, so content never depends on JS */
-.js .results.pending { display: none; }
+/* reveal.js adds .pending itself and always removes it, so the picks never depend on JS working */
+.results.pending { display: none; }
 
 .offer { border: 1px solid var(--line); border-radius: 12px; padding: 0.75rem; margin: 1rem 0; }
 .offer p { margin: 0.25rem 0; }

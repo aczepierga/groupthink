@@ -31,31 +31,49 @@
     out.appendChild(li);
   }
 
-  if (tpl && out && tpl.content) {
-    var rows = Array.prototype.slice.call(tpl.content.querySelectorAll("li"));
-    var shown = 0;
-    var timer = null;
+  // The picks are visible in the HTML. Only when the template API is there do we hide them, and any
+  // failure below shows them again, so a script error can never leave the page without its results.
+  function showResults() {
+    if (results) { results.classList.remove("pending"); }
+    if (skip) { skip.hidden = true; }
+  }
 
-    var finish = function () {
-      if (timer !== null) { window.clearTimeout(timer); timer = null; }
-      while (shown < rows.length) { showRow(rows[shown]); shown += 1; }
-      if (results) { results.classList.remove("pending"); }
-      if (skip) { skip.hidden = true; }
-    };
+  if (tpl && out && tpl.content && results) {
+    try {
+      var rows = Array.prototype.slice.call(tpl.content.querySelectorAll("li"));
+      var shown = 0;
+      var timer = null;
 
-    var next = function () {
-      timer = null;
-      if (shown < rows.length) {
-        showRow(rows[shown]);
-        shown += 1;
-        timer = window.setTimeout(next, step);
-      } else {
-        finish();
-      }
-    };
+      var finish = function () {
+        try {
+          if (timer !== null) { window.clearTimeout(timer); timer = null; }
+          while (shown < rows.length) { showRow(rows[shown]); shown += 1; }
+        } finally {
+          showResults();
+        }
+      };
 
-    if (skip) { skip.addEventListener("click", finish); }
-    next();
+      var next = function () {
+        timer = null;
+        try {
+          if (shown < rows.length) {
+            showRow(rows[shown]);
+            shown += 1;
+            timer = window.setTimeout(next, step);
+          } else {
+            finish();
+          }
+        } catch (e) {
+          showResults();
+        }
+      };
+
+      results.classList.add("pending");
+      if (skip) { skip.hidden = false; skip.addEventListener("click", finish); }
+      next();
+    } catch (e) {
+      showResults();
+    }
   }
 
   var copyButtons = document.querySelectorAll("[data-copy]");

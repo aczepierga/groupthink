@@ -10,7 +10,7 @@ deadline. purge_expired is a no-op: Redis does the deleting. Raw IPs never reach
   gt:plan:<id>                   JSON plan incl. expires_at   string
   gt:cards:<id>                  member_id -> JSON Member     hash
   gt:result:<id>                 JSON {"lines", "result"}     string
-  gt:argues:<id>                 /argue runs                  counter
+  gt:argues:<id>                 /argue runs claimed          counter (claim_run INCRs, release_run DECRs)
   gt:votes:<id>                  member_id -> product_id      hash
   gt:pick:<id>                   product_id                   string
   gt:carts:<id>:<option_id>      cart ids, append order       list
@@ -45,7 +45,7 @@ class DurableStore:
     def _write(self, plan_id, commands, keys):
         """Run commands plus an EXPIREAT <plan deadline> per key as one transaction."""
         deadline = self._deadline(plan_id)
-        self.kv.multi_exec([list(c) for c in commands] + [["EXPIREAT", k, deadline] for k in keys])
+        return self.kv.multi_exec([list(c) for c in commands] + [["EXPIREAT", k, deadline] for k in keys])
 
     @staticmethod
     def _day(dt):
@@ -73,18 +73,27 @@ class DurableStore:
         return json.loads(raw) if raw else None
 
     # -- cards --
-    def put_card(self, plan_id, member):
+    def put_card(self, plan_id, member, cap=None):
+        """HSET then count: a NEW member over `cap` is taken back out (False). Racing joiners at the last
+        seat can both be turned away, never both admitted."""
         key = P + "cards:" + plan_id
-        self._write(plan_id, [["HSET", key, member.id, json.dumps(member.to_dict())]], [key])
+        out = self._write(plan_id, [["HSET", key, member.id, json.dumps(member.to_dict())]], [key])
+        is_new = int(out[0] or 0) == 1
+        if cap is not None and is_new and self.kv.hlen(key) > cap:
+            self.kv.hdel(key, member.id)
+            return False
+        return True
 
     def cards(self, plan_id):
         return [Member.from_dict(json.loads(v)) for v in self.kv.hgetall(P + "cards:" + plan_id).values()]
 
     # -- debate result --
     def save_result(self, plan_id, lines, result):
-        rkey, akey = P + "result:" + plan_id, P + "argues:" + plan_id
+        rkey = P + "result:" + plan_id
         body = json.dumps({"lines": [ln.to_dict() for ln in lines], "result": result.to_dict()})
-        self._write(plan_id, [["SET", rkey, body], ["INCR", akey]], [rkey, akey])
+        # a new result resets the vote: votes and pick belong to the old top options
+        self._write(plan_id, [["SET", rkey, body], ["DEL", P + "votes:" + plan_id], ["DEL", P + "pick:" + plan_id]],
+                    [rkey])
 
     def get_result(self, plan_id):
         raw = self.kv.get(P + "result:" + plan_id)
@@ -95,6 +104,21 @@ class DurableStore:
 
     def argue_count(self, plan_id):
         return int(self.kv.get(P + "argues:" + plan_id) or 0)
+
+    def claim_run(self, plan_id, cap=2):
+        """INCR the run counter (with the plan deadline, one transaction); over `cap` it is DECRed back and
+        None is returned, so of N racing claims exactly the first `cap` succeed."""
+        key = P + "argues:" + plan_id
+        n = int(self._write(plan_id, [["INCR", key]], [key])[0])
+        if n > cap:
+            self.kv.decr(key)
+            return None
+        return n
+
+    def release_run(self, plan_id):
+        key = P + "argues:" + plan_id
+        if int(self.kv.decr(key)) < 0:
+            self.kv.incr(key)
 
     # -- votes / pick --
     def put_vote(self, plan_id, member_id, product_id):
