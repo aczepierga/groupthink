@@ -192,6 +192,8 @@ def test_deal_link_only_for_matched_https_offer_url():
     "//customers.livingsocial.com/deals/x",
     "/deals/x",
     BUY,                                                     # a buy link is never an offer link
+    "https://customers.livingsocial.com/%62uy/x",            # percent-encoded "buy" segment
+    "https://customers.livingsocial.com/deals/%43heckout",   # percent-encoded "Checkout"
     "https://www.groupon.com/checkout/abc",
     "https://customers.livingsocial.com/deals/x y",
     "https://customers.livingsocial.com/deals/x\n",

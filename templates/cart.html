@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}GroupThink: the cart{% endblock %}
+{% block content %}
+<h1>The cart</h1>
+<p class="muted">{{ plan.city }}, {{ plan.date_text }}. <a href="/p/{{ plan_id }}/argue">Back to the picks</a></p>
+{% include "_copy.html" %}
+
+<section class="offer" aria-labelledby="cart-h">
+  <h2 id="cart-h">{{ title }}</h2>
+  {% if option_title %}<p class="muted">Option: {{ option_title }}</p>{% endif %}
+
+  {% if view.unavailable %}
+  <div class="callout" role="status">
+    <p><strong>{{ view.message }}</strong></p>
+    <p>Groupon says this offer can no longer be bought, so there is no cart link and nothing was added.</p>
+    {% if runner_up %}
+    <p>Runner-up: {{ runner_up.title }} ({{ runner_up.price }} per voucher). To switch, ask the group to vote for it on the <a href="/p/{{ plan_id }}/argue">picks page</a>.</p>
+    {% else %}
+    <p>No other option is on the table. The host can run the argument again from the <a href="/p/{{ plan_id }}">plan page</a>.</p>
+    {% endif %}
+  </div>
+
+  {% elif new_price %}
+  <div class="callout" role="status">
+    <p><strong>{{ view.message }}</strong></p>
+    <p>The group voted on {{ unit }} per voucher. Groupon now charges {{ new_price }} per voucher for {{ view.quantity }} voucher{{ '' if view.quantity == 1 else 's' }}. No cart link is shown until someone agrees to the new price.</p>
+    <form method="post" action="/p/{{ plan_id }}/cart">
+      <input type="hidden" name="product_id" value="{{ product_id }}">
+      <input type="hidden" name="expected_minor" value="{{ view.new_price_minor }}">
+      <button type="submit">Use the new price, {{ new_price }}</button>
+    </form>
+  </div>
+
+  {% elif view.error %}
+  <div class="callout" role="status">
+    <p><strong>{{ view.error }}</strong></p>
+  </div>
+
+  {% elif view.links %}
+  <p class="price">Buy {{ view.quantity }} voucher{{ '' if view.quantity == 1 else 's' }} at <span class="now">{{ unit }}</span> each. Total {{ total }}, before tax and promo codes.</p>
+  {% if view.message %}<p>{{ view.message }}</p>{% endif %}
+  <p>One person pays on Groupon checkout.</p>
+  {% if view.links|length > 1 %}
+  <ol class="checkouts">
+    {% for link in view.links %}<li><a class="button" href="{{ link }}" target="_blank" rel="noopener noreferrer">Checkout {{ loop.index }} of {{ view.links|length }}</a></li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p><a class="button" href="{{ view.links[0] }}" target="_blank" rel="noopener noreferrer">Open the Groupon checkout</a></p>
+  {% endif %}
+  {% if view.missing %}<p class="muted">{{ view.missing }} more checkout link{{ '' if view.missing == 1 else 's' }} still to create.</p>{% endif %}
+
+  {% else %}
+  <p>No cart link yet. Press the button to put {{ view.quantity }} voucher{{ '' if view.quantity == 1 else 's' }} in a Groupon cart.</p>
+  {% if view.message %}<p>{{ view.message }}</p>{% endif %}
+  {% endif %}
+
+  {% if can_create %}
+  <form method="post" action="/p/{{ plan_id }}/cart">
+    <input type="hidden" name="product_id" value="{{ product_id }}">
+    <button type="submit">Get the cart link</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

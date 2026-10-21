@@ -65,6 +65,12 @@
   {% if winner %}
   <p class="winner" data-winner="{{ winner.product_id }}" data-final="{{ 'yes' if final else 'no' }}">{% if final %}The group picked{% else %}Leading so far{% endif %}: {{ winner.title }} <span class="muted">({{ reason }})</span></p>
   {% if final %}<p class="muted">The cart link comes next. Remember the voucher does not book a date or time.</p>
+  {% if can_cart %}
+  <form method="post" action="/p/{{ plan_id }}/cart">
+    <input type="hidden" name="product_id" value="{{ winner.product_id }}">
+    <button type="submit">Get the cart link</button>
+  </form>
+  {% endif %}
   {% else %}<p class="muted">Waiting for the rest of the group to vote.</p>{% endif %}
   {% elif offers %}
   <p class="muted">Vote for one. No votes yet, no winner yet.</p>

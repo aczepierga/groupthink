@@ -4,8 +4,10 @@ Identity: the host token and each member id live only in HttpOnly cookies (host_
 plan stores a SHA-256 of the host token. Nothing private is ever put in a URL. Every value that came
 from a member or from the API goes through Jinja autoescape; nothing here is marked safe.
 """
+import csv
 import hashlib
 import hmac
+import io
 import logging
 import os
 import re
@@ -14,15 +16,16 @@ import tempfile
 import threading
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 from . import demo as demo_data
 from . import limits
 from .candidates import Candidate
+from .cart import make_carts
 from .debate import run_debate
 from .fit import Member, Ranked, RankResult, per_member_spend_minor, rank
 from .kv import Kv
@@ -556,7 +559,7 @@ def safe_deal_url(c: Candidate) -> str | None:
         return None
     if not any(host == d or host.endswith("." + d) for d in DEAL_HOSTS):
         return None
-    if _BUY_SEGMENTS & {seg.lower() for seg in parts.path.split("/")}:
+    if _BUY_SEGMENTS & {seg.lower() for seg in unquote(parts.path).split("/")}:
         return None
     return url
 
@@ -651,7 +654,7 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         offers=offers, empty=empty, owns_hard_no=owns_hard_no, thin=_thin_view(result, plan["city"]),
         winner=winner, final=tal["final"], reason=tal["reason"], leaders=tal["leaders"], host=host,
         can_pick=host and tal["pickable"] and tal["best"] > 0 and len(tal["leaders"]) > 1,
-        can_vote=me is not None,
+        can_vote=me is not None, can_cart=bool(winner and tal["final"] and (host or me is not None)),
         runs=deps.store.argue_count(plan_id), max_runs=MAX_RUNS)
 
 
@@ -713,3 +716,122 @@ def pick(plan_id: str, request: Request, form: dict = Depends(read_form), deps: 
         raise refuse(400, "The host only breaks ties, and only between the tied options.", "Bad request")
     store.set_pick(plan_id, form["product_id"])
     return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
+
+
+# ---- cart and order evidence ----------------------------------------------------------------------
+
+MAX_EXPECTED_MINOR = 10_000_000
+
+
+def _cart_context(request, deps, plan_id):
+    """(plan, result, tally, winning Ranked) for a cart request, or the page error that explains why not.
+
+    Only the final group winner (most votes, or the host's tie-break) can be carted, and only the host or a
+    member with a card may ask for it."""
+    plan = load_plan(deps, plan_id)
+    store = deps.store
+    cards = store.cards(plan_id)
+    if not (is_host(request, plan_id, plan) or current_member(request, plan_id, cards) is not None):
+        raise refuse(403, "Only the host or a member of this plan can get the cart link, from the browser "
+                          "they joined with.")
+    got = store.get_result(plan_id)
+    tal = win = None
+    if got is not None:
+        tal = tally(got[1].top, store.votes(plan_id), store.get_pick(plan_id), sum(1 for m in cards if not m.sample))
+        win = next((r for r in got[1].top if r.candidate.product_id == tal["winner"]), None)
+    if win is None or not tal["final"]:
+        raise refuse(409, "The group has not agreed on one option yet. Finish the vote, then come back for the "
+                          "cart link.", "Not yet")
+    return plan, got[1], tal, win
+
+
+def _runner_up(result: RankResult, tal: dict, win: Ranked) -> dict | None:
+    others = [r for r in result.top if r.candidate.product_id != win.candidate.product_id]
+    others.sort(key=lambda r: -tal["counts"].get(r.candidate.product_id, 0))
+    if not others:
+        return None
+    c = others[0].candidate
+    return {"title": c.title, "price": fmt(c.price_minor, c.precision)}
+
+
+def _render_cart(request, plan_id, plan, result, tal, win, view):
+    c = win.candidate
+    unit = view.unit_minor if view.unit_minor is not None else c.price_minor
+    return render(
+        request, "cart.html", plan_id=plan_id, plan=plan, product_id=c.product_id, title=c.title,
+        option_title=c.option_title, view=view, unit=fmt(unit, view.precision),
+        total=fmt(view.total_minor, view.precision),
+        new_price=fmt(view.new_price_minor, view.precision) if view.new_price_minor is not None else None,
+        runner_up=_runner_up(result, tal, win) if view.unavailable else None,
+        can_create=bool(view.missing) and not view.unavailable and view.new_price_minor is None)
+
+
+def _cart_unavailable(request, exc):
+    log.warning("cart failed: %s status=%s", type(exc).__name__, getattr(exc, "status", None))
+    return render(request, "error.html", 502, title="The cart is unavailable",
+                  message="We could not reach LivingSocial just now. Nothing was bought or charged. "
+                          "Try again in a minute.")
+
+
+@router.get("/p/{plan_id}/cart")
+def cart_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
+    """Shows the carts that already work (re-read from Groupon now). Never creates one."""
+    plan, result, tal, win = _cart_context(request, deps, plan_id)
+    try:
+        view = make_carts(deps.ls, deps.store, win, plan_id, now=deps.now(), create=False)
+    except PlanNotFound:
+        raise
+    except Exception as exc:   # LsApiError, a missing key, a network failure: say none of it
+        return _cart_unavailable(request, exc)
+    return _render_cart(request, plan_id, plan, result, tal, win, view)
+
+
+@router.post("/p/{plan_id}/cart")
+def cart_create(plan_id: str, request: Request, form: dict = Depends(read_form), deps: Deps = Depends(get_deps)):
+    plan, result, tal, win = _cart_context(request, deps, plan_id)
+    named = form.get("product_id", "")
+    if named and named != win.candidate.product_id:
+        raise refuse(403, "Only the option the group picked can be put in a cart.")
+    expected = None
+    raw = form.get("expected_minor", "").strip()
+    if raw:
+        try:
+            expected = int(raw)
+        except ValueError:
+            expected = 0
+        if not 1 <= expected <= MAX_EXPECTED_MINOR:
+            raise refuse(400, "That price could not be read.", "Bad request")
+    try:
+        view = make_carts(deps.ls, deps.store, win, plan_id, expected, deps.now())
+    except PlanNotFound:
+        raise
+    except Exception as exc:
+        return _cart_unavailable(request, exc)
+    return _render_cart(request, plan_id, plan, result, tal, win, view)
+
+
+@router.get("/admin/carts.csv")
+def admin_carts(request: Request, deps: Deps = Depends(get_deps)):
+    """Order evidence for the owner: every cart we made, its live status, and whether Groupon recorded an
+    order on it. Header X-Admin-Token must equal env ADMIN_TOKEN; with no ADMIN_TOKEN the route does not exist.
+    No customer fields and no buy link ever leave through here."""
+    token = os.environ.get("ADMIN_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=404)
+    given = request.headers.get("x-admin-token", "")
+    if not hmac.compare_digest(given.encode("utf8"), token.encode("utf8")):
+        return Response("Forbidden\n", status_code=403, media_type="text/plain")
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(["cart_id", "plan_id", "status", "has_order", "created_at"])
+    for rec in deps.store.carts():
+        try:
+            cart = deps.ls.get_cart(rec["cart_id"])
+            status = str(cart.get("status") or "unknown")
+            has_order = "true" if cart.get("grouponOrderUuid") else "false"
+        except Exception as exc:   # one unreadable cart must not hide the others
+            log.warning("admin export: cart unreadable: %s", type(exc).__name__)
+            status, has_order = "unreadable", "unknown"
+        writer.writerow([rec["cart_id"], rec["plan_id"], status, has_order, rec.get("created_at") or ""])
+    return Response(out.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="carts.csv"'})
