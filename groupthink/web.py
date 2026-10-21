@@ -193,12 +193,21 @@ def cross_site(request: Request) -> bool:
     return False
 
 
+THANKS_PATH = "/thanks"
+
+
 async def _housekeeping(request, call_next):
     deps = request.app.state.deps
     path = request.url.path
     if request.method == "POST" and cross_site(request):
         response = render(request, "error.html", 403, title="Not allowed",
                           message="That request came from another site, so it was refused.")
+        for k, v in SECURITY_HEADERS.items():
+            response.headers[k] = v
+        return response
+    if path == THANKS_PATH:        # a static landing page: no storage gate, no purge, no store of any kind
+        response = await call_next(request)
+        response.headers.setdefault("Cache-Control", "no-store")
         for k, v in SECURITY_HEADERS.items():
             response.headers[k] = v
         return response
@@ -656,7 +665,7 @@ def _fact_lines(c: Candidate) -> list[str]:
     return ["21+ only"] if c.facts.age_21 else []
 
 
-DEAL_HOSTS = ("livingsocial.com", "groupon.com")
+DEAL_HOSTS = ("livingsocial.com",)
 _HOST_RE = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*")
 _BAD_URL_CHARS = re.compile(r"[\s\\\x00-\x1f\x7f]")
 _BUY_SEGMENTS = {"buy", "cart", "checkout"}
@@ -664,7 +673,7 @@ _BUY_SEGMENTS = {"buy", "cart", "checkout"}
 
 def safe_deal_url(c: Candidate) -> str | None:
     """The public deal page for a result card, or None. Only a strict agent match carries one, and only
-    an https URL on a livingsocial.com or groupon.com host (no credentials, no odd port, no buy or cart
+    an https URL on a livingsocial.com host (no credentials, no odd port, no buy or cart
     path) is ever linked. Anything else renders as no link at all."""
     url = c.offer_url
     if c.permalink is None or not isinstance(url, str) or not url or len(url) > 500:
@@ -1002,6 +1011,14 @@ def cart_create(plan_id: str, request: Request, form: dict = Depends(read_form),
                         moved_from)
 
 
+@router.get(THANKS_PATH)
+def thanks(request: Request):
+    """Where Groupon sends buyers after checkout (?grouponOrderUuid=... is appended). Order evidence is read
+    server-side from the cart, so the query string is deliberately never read: it cannot reach a log, a store
+    or the page. No Deps, and _housekeeping lets this path past the storage gate."""
+    return render(request, "thanks.html")
+
+
 def _demo_flag(plan) -> str:
     if not plan or plan.get("expired"):
         return "unknown"
@@ -1030,14 +1047,16 @@ def admin_carts(request: Request, deps: Deps = Depends(get_deps)):
         return Response("Forbidden\n", status_code=403, media_type="text/plain")
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
-    writer.writerow(["cart_id", "plan_id", "status", "has_order", "created_at", "demo"])
-    seen, demo_by_plan = set(), {}
+    writer.writerow(["cart_id", "plan_id", "status", "has_order", "created_at", "demo", "mode"])
+    seen, demo_by_plan, mode_by_plan = set(), {}, {}
     for rec in deps.store.carts():
         if rec["cart_id"] in seen:                 # a store SCAN may return the same key twice
             continue
         seen.add(rec["cart_id"])
         if rec["plan_id"] not in demo_by_plan:
-            demo_by_plan[rec["plan_id"]] = _demo_flag(deps.store.get_plan(rec["plan_id"]))
+            plan = deps.store.get_plan(rec["plan_id"])
+            demo_by_plan[rec["plan_id"]] = _demo_flag(plan)
+            mode_by_plan[rec["plan_id"]] = plan_mode(plan) if plan and not plan.get("expired") else "unknown"
         try:
             cart = deps.ls.get_cart(rec["cart_id"])
             status = str(cart.get("status") or "unknown")
@@ -1046,6 +1065,6 @@ def admin_carts(request: Request, deps: Deps = Depends(get_deps)):
             log.warning("admin export: cart unreadable: %s", type(exc).__name__)
             status, has_order = "unreadable", "unknown"
         writer.writerow([rec["cart_id"], rec["plan_id"], status, has_order, rec.get("created_at") or "",
-                         demo_by_plan[rec["plan_id"]]])
+                         demo_by_plan[rec["plan_id"]], mode_by_plan[rec["plan_id"]]])
     return Response(out.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="carts.csv"'})

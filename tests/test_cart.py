@@ -517,7 +517,7 @@ def test_admin_csv_has_no_customer_fields(monkeypatch):
     api.carts["cart-2"]["status"] = "CHECKED_OUT"
     r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
     rows = list(csv.reader(io.StringIO(r.text)))
-    assert rows[0] == ["cart_id", "plan_id", "status", "has_order", "created_at", "demo"]
+    assert rows[0] == ["cart_id", "plan_id", "status", "has_order", "created_at", "demo", "mode"]
     body = {row[0]: row for row in rows[1:]}
     assert set(body) == {"cart-1", "cart-2", "cart-3"}
     assert body["cart-2"][1:4] == [pid, "CHECKED_OUT", "true"]
@@ -542,7 +542,7 @@ def test_admin_csv_empty_is_just_the_header(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", ADMIN)
     env, _ = make_env()
     r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
-    assert r.text.strip() == "cart_id,plan_id,status,has_order,created_at,demo"
+    assert r.text.strip() == "cart_id,plan_id,status,has_order,created_at,demo,mode"
 
 
 # ---- fix round 1: ceiling, convergence, min units, accepted price, throttle ----------------------------
@@ -741,7 +741,7 @@ def test_admin_csv_has_demo_column(monkeypatch):
     get_cart_link(host, real_pid)
     r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
     rows = list(csv.reader(io.StringIO(r.text)))
-    assert rows[0][-1] == "demo" and len(rows[0]) == 6
+    assert rows[0][-2:] == ["demo", "mode"] and len(rows[0]) == 7
     by_plan = {row[1]: row[5] for row in rows[1:]}
     assert by_plan == {demo_pid: "true", real_pid: "false"}
 

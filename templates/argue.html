@@ -132,7 +132,7 @@
     <h4>Heads up</h4>
     <ul>{% for w in o.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
     {% endif %}
-    {% if o.deal_url %}<p><a href="{{ o.deal_url }}" target="_blank" rel="noopener noreferrer">See the deal</a></p>{% endif %}
+    {% if o.deal_url %}<p><a href="{{ o.deal_url }}" target="_blank" rel="noopener noreferrer">Read more on LivingSocial</a></p>{% endif %}
     {% if o.promo %}<p>Code {{ o.promo }} may lower the price</p>{% endif %}
     <p>{% if o.voucher_until %}Voucher valid until {{ o.voucher_until }}{% else %}Voucher valid until: unknown{% endif %}</p>
     {% if o.blocked %}<p class="callout" role="status">{{ not_cartable_label }}</p>

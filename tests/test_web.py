@@ -1373,3 +1373,109 @@ def test_home_has_one_player_form_with_unique_ids(env):
     assert len(ids) == len(set(ids)), ids
     for prefix in ("solo-", "group-", "demo-"):
         assert any(i.startswith(prefix + "city") for i in ids), prefix
+
+
+# ---- thanks page, admin mode column, deal-link host ---------------------------------------------
+
+THANKS_COPY = ("Thanks for shopping through GroupThink. If you finished checkout, "
+               "your vouchers are in your Groupon account.")
+ORDER_ID = "5d0c2f3a-8b1e-4c7d-a9f0-1e2d3c4b5a69"
+
+
+def test_thanks_page_copy():
+    r = Env().browser().get(f"/thanks?grouponOrderUuid={ORDER_ID}")
+    assert r.status_code == 200
+    assert THANKS_COPY in r.text and 'href="/"' in r.text
+    assert ORDER_ID not in r.text
+
+
+@pytest.mark.parametrize("query", ["", "?grouponOrderUuid=abc", "?grouponOrderUuid=" + "x" * 10240,
+                                   "?grouponOrderUuid=<script>x</script>", "?other=<script>x</script>"],
+                         ids=["missing", "short", "10kb", "script-in-id", "script-elsewhere"])
+def test_thanks_ignores_any_query(query):
+    r = Env().browser().get("/thanks" + query)
+    assert r.status_code == 200 and THANKS_COPY in r.text
+    assert "<script>x" not in r.text and "xxxxxxxx" not in r.text and "&lt;script" not in r.text
+
+
+def test_thanks_survives_broken_storage(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setattr(web, "default_store", lambda: pytest.fail("thanks must not build a store"))
+    c = TestClient(create_app(), base_url="https://testserver")
+    assert c.get("/").status_code == 503                      # the gate still guards other routes
+    r = c.get(f"/thanks?grouponOrderUuid={ORDER_ID}")
+    assert r.status_code == 200 and THANKS_COPY in r.text and CSP in r.headers
+    assert ORDER_ID not in r.text
+    monkeypatch.delenv("VERCEL")
+
+    class Down(SqliteStore):
+        def __getattribute__(self, name):
+            if name in ("get_plan", "purge_expired", "carts", "admin_failures"):
+                raise KvError("KV HTTP 500: upstash-secret-detail")
+            return super().__getattribute__(name)
+
+    c = Env(store=Down(":memory:")).browser()
+    assert c.get("/p/abc").status_code == 503                 # the handler still guards other routes
+    r = c.get("/thanks")
+    assert r.status_code == 200 and THANKS_COPY in r.text
+
+
+def test_thanks_touches_no_store():
+    class Spy(SqliteStore):
+        calls = []
+
+        def __getattribute__(self, name):
+            attr = super().__getattribute__(name)
+            if not name.startswith("_") and callable(attr):
+                Spy.calls.append(name)
+            return attr
+
+    env = Env(store=Spy(":memory:"))
+    Spy.calls.clear()
+    assert env.browser().get(f"/thanks?grouponOrderUuid={ORDER_ID}").status_code == 200
+    assert Spy.calls == []
+
+
+def test_thanks_never_logs_order_id(caplog):
+    with caplog.at_level(logging.DEBUG):
+        Env().browser().get(f"/thanks?grouponOrderUuid={ORDER_ID}")
+    # the test client's own httpx logger echoes the request URL; only our app's records matter
+    ours = [r for r in caplog.records if not r.name.startswith(("httpx", "httpcore", "asyncio"))]
+    assert all(ORDER_ID not in str(r.args) + r.getMessage() for r in ours)
+
+
+def test_admin_csv_mode_column(monkeypatch):
+    import csv
+    import io
+    monkeypatch.setenv("ADMIN_TOKEN", "adm-token-for-tests")
+    env = Env()
+    ids = {}
+    for key, plan in {"solo": {"mode": "solo", "demo": False}, "group": {"mode": "group", "demo": False},
+                      "demo": {"mode": "group", "demo": True}, "legacy": {"demo": False}}.items():
+        ids[key] = env.store.create_plan({**plan, "created_at": T0.isoformat()})
+        env.store.record_cart(ids[key], "p", "o", "cart-" + key, T0.isoformat())
+
+    class Carts:
+        def get_cart(self, cart_id):
+            return {"status": "ACTIVE"}
+
+    env.app.state.deps._ls = Carts()
+    r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": "adm-token-for-tests"})
+    rows = list(csv.reader(io.StringIO(r.text)))
+    assert rows[0] == ["cart_id", "plan_id", "status", "has_order", "created_at", "demo", "mode"]
+    by_cart = {row[0]: row for row in rows[1:]}
+    assert {k: by_cart["cart-" + k][6] for k in ids} == {"solo": "solo", "group": "group", "demo": "group",
+                                                         "legacy": "group"}
+    assert by_cart["cart-demo"][5] == "true"
+
+
+def test_deal_link_livingsocial_only():
+    from groupthink.candidates import Candidate
+    from groupthink.facts import Facts
+    assert web.DEAL_HOSTS == ("livingsocial.com",)
+
+    def cand(url):
+        return Candidate("p", "o", "pl", "T", "O", None, "", "", 100, None, 2, None, None, 1, None, None, [], [],
+                         None, None, Facts(), url)
+    assert web.safe_deal_url(cand("https://www.groupon.com/deals/x")) is None
+    assert web.safe_deal_url(cand("https://www.livingsocial.com/deals/x")) == "https://www.livingsocial.com/deals/x"

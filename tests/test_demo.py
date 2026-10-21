@@ -169,15 +169,15 @@ def test_sample_prefix_in_debate_lines(env):
 
 def test_deal_link_only_for_matched_https_offer_url():
     t = one_offer_page(LinkLs(DEAL))
-    link = f'<a href="{DEAL}" target="_blank" rel="noopener noreferrer">See the deal</a>'
+    link = f'<a href="{DEAL}" target="_blank" rel="noopener noreferrer">Read more on LivingSocial</a>'
     assert t.count(link) == 3                        # one per result card
     assert BUY not in t and "/buy/" not in t and "buyUrl" not in t
     # Partner-only offers (no agent match) keep the fine-print text and get no link
     t = one_offer_page(LinkLs(DEAL, agent=False))
-    assert "See the deal" not in t and DEAL not in t
+    assert "Read more on LivingSocial" not in t and DEAL not in t
     assert "Fine print: unknown, check the deal page" in t
     # matched, but the agent document has no offerUrl
-    assert "See the deal" not in one_offer_page(LinkLs(None))
+    assert "Read more on LivingSocial" not in one_offer_page(LinkLs(None))
 
 
 @pytest.mark.parametrize("url", [
@@ -201,14 +201,19 @@ def test_deal_link_only_for_matched_https_offer_url():
 ])
 def test_deal_link_refuses_unsafe_urls(url):
     t = one_offer_page(LinkLs(url))
-    assert "See the deal" not in t
+    assert "Read more on LivingSocial" not in t
     assert not url or f'href="{url}"' not in t
 
 
-@pytest.mark.parametrize("url", ["https://www.groupon.com/deals/x", "https://livingsocial.com/deals/x",
+@pytest.mark.parametrize("url", ["https://livingsocial.com/deals/x",
                                  "https://customers.livingsocial.com/deals/x?ref=1"])
-def test_deal_link_allows_livingsocial_and_groupon_hosts(url):
+def test_deal_link_allows_livingsocial_hosts(url):
     assert f'href="{url}"' in one_offer_page(LinkLs(url))
+
+
+def test_deal_link_refuses_groupon_host():
+    t = one_offer_page(LinkLs("https://www.groupon.com/deals/x"))
+    assert "Read more on LivingSocial" not in t and "groupon.com/deals/x" not in t
 
 
 def test_offer_url_roundtrips_and_old_records_load():
