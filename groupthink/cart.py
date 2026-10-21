@@ -202,7 +202,9 @@ def make_carts(client, store, ranked: Ranked, plan_id: str, expected_price_minor
                     if exc.error == "PRICE_MISMATCH" and exc.current_price_minor is not None:
                         return price_changed(exc.current_price_minor)
                     if exc.error in UNAVAILABLE_ERRORS:
-                        return gone(not_cartable=exc.error == "PRODUCT_NOT_CARTABLE")
+                        # mark the product only when no cart exists for it yet: a refusal on a later chunk
+                        # (after a cart was made or reused) keeps the failure screen but never moves the plan on
+                        return gone(not_cartable=exc.error == "PRODUCT_NOT_CARTABLE" and not carts)
                     raise
                 made_count += 1
                 cart_id = made["id"]

@@ -36,7 +36,7 @@
   <form method="post" action="/p/{{ plan_id }}/card" class="stack">
     <label for="name">Your name</label>
     <input id="name" name="name" type="text" maxlength="40" required value="{{ values.name }}" autocomplete="off">
-    <label for="budget">Max you will spend per person, in dollars</label>
+    <label for="budget">Max you will spend{% if not solo %} per person{% endif %}, in dollars</label>
     <input id="budget" name="budget" type="text" inputmode="decimal" required placeholder="40" value="{{ values.budget }}">
     <label for="likes">What you like (separate with commas)</label>
     <input id="likes" name="likes" type="text" placeholder="pottery, tacos, live music" value="{{ values.likes }}">

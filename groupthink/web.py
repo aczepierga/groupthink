@@ -500,12 +500,14 @@ def _relax_offer(store, plan_id, member):
 
 def _card_page(request, deps, plan_id, plan, cards, status=200, values=None, error=None, lost_seat=False):
     me = current_member(request, plan_id, cards)
-    full = me is None and (lost_seat or len(cards) >= plan["group_size"])
+    solo = plan_mode(plan) == "solo"
+    host = is_host(request, plan_id, plan)
+    full = me is None and (lost_seat or len(cards) >= plan["group_size"] or (solo and not host))
     return render(request, "card.html", status if not full else 409, plan_id=plan_id, plan=plan, me=me,
                   full=full, values=values or _card_values(me), error=error,
                   saved=request.query_params.get("saved") == "1",
-                  relax_word=_relax_offer(deps.store, plan_id, me), solo=plan_mode(plan) == "solo",
-                  host=is_host(request, plan_id, plan), runs=deps.store.argue_count(plan_id),
+                  relax_word=_relax_offer(deps.store, plan_id, me), solo=solo,
+                  host=host, runs=deps.store.argue_count(plan_id),
                   max_runs=MAX_RUNS)
 
 
@@ -521,7 +523,8 @@ def save_card(plan_id: str, request: Request, form: dict = Depends(read_form),
     plan = load_plan(deps, plan_id)
     cards = deps.store.cards(plan_id)
     me = current_member(request, plan_id, cards)
-    if me is None and len(cards) >= plan["group_size"]:
+    if me is None and (len(cards) >= plan["group_size"]
+                       or (plan_mode(plan) == "solo" and not is_host(request, plan_id, plan))):
         return _card_page(request, deps, plan_id, plan, cards)
     values = {"name": form.get("name", ""), "budget": form.get("budget", ""), "likes": form.get("likes", ""),
               "hard_nos": form.get("hard_nos", ""), "constraints": form.get("constraints", ""),
@@ -572,7 +575,7 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
                       message="We could not reach LivingSocial just now. Nothing was changed and this did "
                               "not use up a run. Try again in a minute.")
     try:
-        result = rank(found.candidates, members)
+        result = rank(found.candidates, members, solo=plan_mode(plan) == "solo")
         result.adult_dropped = found.adult_dropped
         lines = run_debate(result, members, _seed(plan_id, run - 1), deps.now().date(), mode=plan_mode(plan))
         store.save_result(plan_id, lines, result)
@@ -726,6 +729,8 @@ def _offer_view(r: Ranked, counts: dict, solo: bool = False, blocked: bool = Fal
         "place": "Place: %s%s" % (place, " (%s)" % c.city if c.place and c.city else ""),
         "quantity": "Buy %d voucher%s for %d %s." % (r.quantity, "" if r.quantity == 1 else "s", group,
                                                      "person" if group == 1 else "people"),
+        "money": "%d voucher%s, %s total" % (r.quantity, "" if r.quantity == 1 else "s",
+                                             fmt(r.quantity * c.price_minor, c.precision)),
         "party": party, "fine_print": c.fine_print, "why": why, "warnings": _warning_lines(r),
         "facts": _fact_lines(c), "deal_url": safe_deal_url(c),
         "promo": c.promo_code, "voucher_until": _date_text(c.voucher_expires),

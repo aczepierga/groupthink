@@ -89,6 +89,7 @@
 
   {% if winner and solo %}
   <p class="winner" data-winner="{{ winner.product_id }}" data-final="yes"><span class="tag">WINNER</span> {{ winner.title }} <span class="muted">({{ reason }})</span></p>
+  <p class="muted money">{{ winner.money }}</p>
   <p class="muted">The cart link comes next. Remember the voucher does not book a date or time.</p>
   {% if can_cart %}
   <form method="post" action="/p/{{ plan_id }}/cart">
@@ -98,6 +99,7 @@
   {% endif %}
   {% elif winner %}
   <p class="winner" data-winner="{{ winner.product_id }}" data-final="{{ 'yes' if final else 'no' }}">{% if final %}<span class="tag">WINNER</span> The group picked{% else %}Leading so far{% endif %}: {{ winner.title }} <span class="muted">({{ reason }})</span></p>
+  <p class="muted money">{{ winner.money }}</p>
   {% if final %}<p class="muted">The cart link comes next. Remember the voucher does not book a date or time.</p>
   {% if can_cart %}
   <form method="post" action="/p/{{ plan_id }}/cart">

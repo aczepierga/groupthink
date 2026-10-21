@@ -180,7 +180,7 @@ def _warnings(c: Candidate, any_kids: bool) -> list[str]:
     return w
 
 
-def rank(cands: list[Candidate], members: list[Member]) -> RankResult:
+def rank(cands: list[Candidate], members: list[Member], solo: bool = False) -> RankResult:
     group = max(len(members), 1)
     any_kids = any(m.kids for m in members)
     hard_nos = [w for m in members for w in m.hard_nos if w.strip()]
@@ -200,6 +200,8 @@ def rank(cands: list[Candidate], members: list[Member]) -> RankResult:
             reason = "kids_21"
         if reason is None and c.max_units is not None and c.max_units < qty:
             reason = "quantity"
+        if reason is None and solo and qty > 1:
+            reason = "quantity"             # a solo plan buys exactly one voucher: a higher minimum never reaches the debate
         if reason is not None:
             reasons.setdefault(c.product_id, reason)
             titles.setdefault(c.product_id, c.title)
