@@ -7,10 +7,19 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="site"><a href="/" class="brand">GroupThink</a></header>
+  <header class="site">
+    <div class="bar">
+      {% block logo %}<a class="brand" href="/">GroupThink</a>{% endblock %}
+      <a class="topbar-link" href="https://www.groupon.com/" target="_blank" rel="noopener noreferrer">Deals on groupon.com</a>
+    </div>
+  </header>
   <main>
     {% block content %}{% endblock %}
   </main>
+  <footer class="site">
+    <p>Unofficial contest entry, built on the LivingSocial Partner API.</p>
+    <p class="footlinks"><a href="https://www.groupon.com/" target="_blank" rel="noopener noreferrer">groupon.com</a> <a href="https://www.livingsocial.com/" target="_blank" rel="noopener noreferrer">livingsocial.com</a></p>
+  </footer>
   <script src="/static/reveal.js" defer></script>
 </body>
 </html>

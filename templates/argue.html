@@ -1,19 +1,20 @@
 {% extends "base.html" %}
 {% block title %}GroupThink: the argument{% endblock %}
 {% block content %}
-<h1>The argument</h1>
+<h1>The fight</h1>
 <p class="muted">{{ plan.city }}, {{ plan.date_text }}. {% if solo %}<a href="/p/{{ plan_id }}/card">Edit my card</a>{% else %}<a href="/p/{{ plan_id }}">Back to the plan</a>{% endif %}</p>
 
 <section aria-labelledby="debate-h">
   <h2 id="debate-h">What the bots say</h2>
+  <div id="arena" class="arena" data-rounds="{{ rounds }}" hidden></div>
   <ol id="debate" class="debate" aria-live="polite"></ol>
   <template id="debate-lines">
-    {% for ln in lines %}<li class="line {{ ln.kind }}"><span class="who">{{ ln.speaker }}</span><span class="say">{{ ln.text }}</span></li>
+    {% for ln in lines %}<li class="line {{ ln.kind }}" data-round="{{ ln.round }}"{% if ln.product_id %} data-product="{{ ln.product_id }}"{% endif %}><span class="who">{{ ln.speaker }}</span><span class="say">{{ ln.text }}</span>{% if ln.kind == "referee" %}<span class="ko">K.O.</span>{% endif %}</li>
     {% endfor %}
   </template>
   <noscript>
     <ol class="debate">
-      {% for ln in lines %}<li class="line {{ ln.kind }}"><span class="who">{{ ln.speaker }}</span><span class="say">{{ ln.text }}</span></li>
+      {% for ln in lines %}<li class="line {{ ln.kind }}" data-round="{{ ln.round }}"{% if ln.product_id %} data-product="{{ ln.product_id }}"{% endif %}><span class="who">{{ ln.speaker }}</span><span class="say">{{ ln.text }}</span>{% if ln.kind == "referee" %}<span class="ko">K.O.</span>{% endif %}</li>
       {% endfor %}
     </ol>
   </noscript>
@@ -96,7 +97,7 @@
   </form>
   {% endif %}
   {% elif winner %}
-  <p class="winner" data-winner="{{ winner.product_id }}" data-final="{{ 'yes' if final else 'no' }}">{% if final %}The group picked{% else %}Leading so far{% endif %}: {{ winner.title }} <span class="muted">({{ reason }})</span></p>
+  <p class="winner" data-winner="{{ winner.product_id }}" data-final="{{ 'yes' if final else 'no' }}">{% if final %}<span class="tag">WINNER</span> The group picked{% else %}Leading so far{% endif %}: {{ winner.title }} <span class="muted">({{ reason }})</span></p>
   {% if final %}<p class="muted">The cart link comes next. Remember the voucher does not book a date or time.</p>
   {% if can_cart %}
   <form method="post" action="/p/{{ plan_id }}/cart">

@@ -343,6 +343,7 @@ def test_links_open_in_new_tab_safely():
     env, api = make_env(fine=("Limit 1 per person.",))
     pid, host, _, _ = final_group(env, api)
     t = get_cart_link(host, pid).text
+    t = re.search(r"<main>.*?</main>", t, re.S).group(0)        # the page chrome has its own external links
     assert t.count('target="_blank" rel="noopener noreferrer"') == 3
 
 
@@ -812,7 +813,7 @@ SOLO_WORDS = re.compile(r"group|everyone|vote|\bhost\b|someone")
 
 
 def solo_words(page):
-    body = re.sub(r"<[^>]+>", " ", page).replace("GroupThink", "").replace("Groupon", "").lower()
+    body = re.sub(r"<[^>]+>", " ", page).replace("GroupThink", "").replace("Groupon", "").replace("groupon", "").lower()
     return SOLO_WORDS.search(body)
 
 

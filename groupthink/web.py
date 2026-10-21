@@ -768,6 +768,40 @@ def _thin_view(result: RankResult, city: str) -> dict | None:
     return {"note": note, "nearby": NEARBY.get(city, [])}
 
 
+def _round_numbers(lines) -> list[int]:
+    """Round of each stored line. Storage is flat, so rebuild the debate's own shape: the scout lines are
+    round 1, each advocate round ends when a speaker would speak twice, and the referee closes round 3 or
+    opens the next free round (the debate never has more than 3)."""
+    out: list[int] = []
+    rnd, seen, prev = 1, set(), None
+    for ln in lines:
+        if ln.kind == "scout":
+            rnd = 1
+        elif ln.kind == "advocate":
+            if prev == "scout":
+                rnd = 2
+                seen = set()
+            elif ln.speaker in seen:
+                rnd += 1
+                seen = set()
+            seen.add(ln.speaker)
+        else:
+            rnd = rnd if rnd >= 3 else rnd + 1
+        rnd = min(rnd, 3)
+        out.append(rnd)
+        prev = ln.kind
+    return out
+
+
+def _round_count(lines) -> int:
+    return max(_round_numbers(lines), default=1)
+
+
+def _lines_with_rounds(lines) -> list[dict]:
+    return [{"speaker": ln.speaker, "kind": ln.kind, "text": ln.text, "product_id": ln.product_id, "round": n}
+            for ln, n in zip(lines, _round_numbers(lines))]
+
+
 @router.get("/p/{plan_id}/argue")
 def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     plan = load_plan(deps, plan_id)
@@ -791,7 +825,7 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     owns_hard_no = bool(empty and empty["kind"] == "hard_no" and me and _has_word(me, empty["word"]))
     return render(
         request, "argue.html", plan_id=plan_id, plan=plan,
-        lines=[{"speaker": ln.speaker, "kind": ln.kind, "text": ln.text} for ln in lines],
+        lines=_lines_with_rounds(lines), rounds=_round_count(lines),
         offers=offers, empty=empty, owns_hard_no=owns_hard_no, thin=_thin_view(result, plan["city"]),
         not_cartable_label=NOT_CARTABLE_LABEL, winner=winner, final=tal["final"], reason=tal["reason"], leaders=tal["leaders"], host=host,
         can_pick=host and tal["pickable"] and tal["best"] > 0 and len(tal["leaders"]) > 1,

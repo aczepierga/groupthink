@@ -2,6 +2,9 @@
 // Debate lines sit in a <template> as escaped text nodes. They are shown one per 900 ms by copying
 // each part with textContent (never innerHTML), then the picks are unhidden. Without JS the picks
 // are visible at once and a <noscript> copy of the lines is shown.
+// Arcade layer: a scoreboard (#arena) shows "ROUND n / N" and one energy bar per advocate. A line that
+// argues for something other than the referee's pick costs its speaker 30 energy when it is shown.
+// Bar widths are CSS classes (hp-100 ... hp-10), so no inline style is ever written.
 (function () {
   var root = document.documentElement;
   root.classList.add("js");
@@ -14,6 +17,13 @@
   var out = document.getElementById("debate");
   var results = document.getElementById("results");
   var skip = document.getElementById("skip-debate");
+  var arena = document.getElementById("arena");
+  var HIT = 30;
+  var FLOOR = 10;
+  var fighters = {};
+  var winnerId = null;
+  var totalRounds = 1;
+  var roundLabel = null;
 
   function part(row, cls) {
     var span = document.createElement("span");
@@ -23,12 +33,83 @@
     return span;
   }
 
+  function setRound(n) {
+    if (roundLabel) { roundLabel.textContent = "ROUND " + n + " / " + totalRounds; }
+  }
+
+  function setEnergy(name) {
+    var f = fighters[name];
+    if (!f) { return; }
+    var pct = Math.max(FLOOR, f.energy);
+    f.fill.className = "hp hp-" + pct;
+    f.box.setAttribute("aria-label", name + " energy " + pct + " percent");
+  }
+
+  // One bar per advocate, built from the template rows, plus the round label. Hidden arena stays hidden
+  // when anything here fails.
+  function buildArena(rows) {
+    if (!arena) { return; }
+    var n = parseInt(arena.getAttribute("data-rounds"), 10);
+    totalRounds = n > 0 ? n : 1;
+    rows.forEach(function (row) {
+      if (row.classList.contains("referee")) { winnerId = row.getAttribute("data-product") || winnerId; }
+    });
+    var head = document.createElement("div");
+    head.className = "fighters";
+    rows.forEach(function (row) {
+      if (!row.classList.contains("advocate")) { return; }
+      var who = row.querySelector(".who");
+      var name = who ? who.textContent : "";
+      if (!name || fighters[name]) { return; }
+      var box = document.createElement("div");
+      box.className = "fighter";
+      var label = document.createElement("span");
+      label.className = "fname";
+      label.textContent = name;
+      var track = document.createElement("div");
+      track.className = "track";
+      track.setAttribute("role", "img");
+      var fill = document.createElement("div");
+      fill.className = "hp hp-100";
+      track.appendChild(fill);
+      box.appendChild(label);
+      box.appendChild(track);
+      head.appendChild(box);
+      fighters[name] = { energy: 100, fill: fill, box: track };
+      setEnergy(name);
+    });
+    roundLabel = document.createElement("p");
+    roundLabel.className = "round";
+    arena.appendChild(roundLabel);
+    arena.appendChild(head);
+    setRound(1);
+    arena.hidden = false;
+  }
+
+  function score(row) {
+    var round = parseInt(row.getAttribute("data-round"), 10);
+    if (round > 0) { setRound(round); }
+    if (row.classList.contains("referee")) {
+      if (arena) { arena.classList.add("ko-on"); }
+      return;
+    }
+    if (!row.classList.contains("advocate") || !winnerId) { return; }
+    var who = row.querySelector(".who");
+    var name = who ? who.textContent : "";
+    if (fighters[name] && row.getAttribute("data-product") !== winnerId) {
+      fighters[name].energy -= HIT;
+      setEnergy(name);
+    }
+  }
+
   function showRow(row) {
     var li = document.createElement("li");
     li.className = row.className;
     li.appendChild(part(row, "who"));
     li.appendChild(part(row, "say"));
+    if (row.classList.contains("referee")) { li.appendChild(part(row, "ko")); }
     out.appendChild(li);
+    try { score(row); } catch (e) { /* the scoreboard is decoration; the lines already showed */ }
   }
 
   // The picks are visible in the HTML. Only when the template API is there do we hide them, and any
@@ -68,9 +149,14 @@
         }
       };
 
-      results.classList.add("pending");
-      if (skip) { skip.hidden = false; skip.addEventListener("click", finish); }
-      next();
+      try { buildArena(rows); } catch (e) { if (arena) { arena.hidden = true; } }
+      if (reduced) {
+        finish();
+      } else {
+        results.classList.add("pending");
+        if (skip) { skip.hidden = false; skip.addEventListener("click", finish); }
+        next();
+      }
     } catch (e) {
       showResults();
     }

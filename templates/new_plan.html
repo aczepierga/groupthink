@@ -1,12 +1,16 @@
 {% extends "base.html" %}
 {% block title %}GroupThink: start a plan{% endblock %}
 {% block content %}
-<h1>GroupThink</h1>
-<p>Everyone in your group gets a bot that argues for them over live LivingSocial offers until the group agrees on one offer and one cart link.</p>
+<div class="title-screen">
+  <h1 class="title">GroupThink</h1>
+  <p class="tagline">Let the AIs fight it out. You get one real deal.</p>
+  <p>Everyone in your group gets a bot that argues for them over live LivingSocial offers until the group agrees on one offer and one cart link.</p>
+</div>
 {% include "_copy.html" %}
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 
-<section aria-labelledby="solo-h">
+<div class="modes">
+<section class="mode solo" aria-labelledby="solo-h">
   <h2 id="solo-h">1 PLAYER</h2>
   <p class="muted">Going alone? Two voices in your own head, your Saver and your Fun side, argue over live offers until one wins and you get one cart link.</p>
   <form method="post" action="/solo" class="stack">
@@ -21,12 +25,13 @@
     <input id="solo-date_text" name="date_text" type="text" maxlength="60" required placeholder="Sat Nov 8, evening" value="{{ values.date_text }}">
     <label for="solo-theme">Theme or vibe (optional)</label>
     <input id="solo-theme" name="theme" type="text" maxlength="80" placeholder="date night, pottery, tacos" value="{{ values.theme }}">
-    <button type="submit">Start solo</button>
+    <button type="submit">INSERT COIN: 1 PLAYER</button>
   </form>
 </section>
 
-<section aria-labelledby="group-h">
-  <h2 id="group-h">2 TO 6 PLAYERS</h2>
+<section class="mode versus" aria-labelledby="group-h">
+  <h2 id="group-h">2+ PLAYERS</h2>
+  <p class="muted">Everyone gets a bot. They fight until the group agrees on one offer. Two to six people.</p>
 <form method="post" action="/plans" class="stack">
   <label for="group-city">City</label>
   <select id="group-city" name="city">
@@ -41,11 +46,12 @@
   <input id="group-group_size" name="group_size" type="number" inputmode="numeric" min="2" max="6" required value="{{ values.group_size }}">
   <label for="group-theme">Theme or vibe (optional)</label>
   <input id="group-theme" name="theme" type="text" maxlength="80" placeholder="date night, pottery, tacos" value="{{ values.theme }}">
-  <button type="submit">Start a plan</button>
+  <button type="submit">INSERT COIN: 2+ PLAYERS</button>
 </form>
 </section>
+</div>
 
-<section aria-labelledby="demo-h">
+<section class="demo" aria-labelledby="demo-h">
   <h2 id="demo-h">Just looking?</h2>
   <p class="muted">See a full argument on your own. Two sample people join you, clearly labelled. The offers are real and live.</p>
   <form method="post" action="/demo" class="stack">
