@@ -38,10 +38,11 @@ class Member:
     kids: bool
     constraints: str
     share_numbers: bool
+    sample: bool = False   # a labelled demo person: argues, but is not a voter
 
     @classmethod
     def clean(cls, id, name, max_budget_minor, likes, hard_nos, kids, constraints,
-              share_numbers) -> "Member":
+              share_numbers, sample=False) -> "Member":
         """Build a Member from untrusted input. Truncates, drops empties, never raises."""
         try:
             budget = max(0, int(max_budget_minor))
@@ -50,7 +51,7 @@ class Member:
         return cls(id=_text(str(id) if id is not None else "", 64), name=_text(name, NAME_MAX),
                    max_budget_minor=budget, likes=_text_list(likes), hard_nos=_text_list(hard_nos),
                    kids=bool(kids), constraints=_text(constraints, TEXT_MAX),
-                   share_numbers=bool(share_numbers))
+                   share_numbers=bool(share_numbers), sample=bool(sample))
 
     def to_dict(self) -> dict:
         return asdict(self)

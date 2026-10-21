@@ -348,7 +348,7 @@ def create_demo(request: Request, form: dict = Depends(read_form), deps: Deps = 
     for mid, p in people:
         deps.store.put_card(plan_id, Member.clean(
             mid, p["name"], p["budget_minor"], p["likes"], p["hard_nos"], p["kids"], p["constraints"],
-            p["share_numbers"]), cap=demo_data.GROUP_SIZE)
+            p["share_numbers"], p["sample"]), cap=demo_data.GROUP_SIZE)
     response = RedirectResponse("/p/" + plan_id, status_code=303)
     set_cookie(response, "host_" + plan_id, token)
     set_cookie(response, "m_" + plan_id, member_id)
@@ -637,7 +637,8 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         return RedirectResponse("/p/" + plan_id, status_code=303)
     lines, result = got
     cards = deps.store.cards(plan_id)
-    tal = tally(result.top, deps.store.votes(plan_id), deps.store.get_pick(plan_id), len(cards))
+    tal = tally(result.top, deps.store.votes(plan_id), deps.store.get_pick(plan_id),
+                 sum(1 for m in cards if not m.sample))
     offers = [_offer_view(r, tal["counts"]) for r in result.top]
     winner = next((o for o in offers if o["product_id"] == tal["winner"]), None)
     host = is_host(request, plan_id, plan)

@@ -12,11 +12,11 @@ GROUP_SIZE = 3
 
 # The visitor: host of the demo plan and a member, so they can open and edit their own card.
 YOU = {"name": "You", "budget_minor": 6000, "likes": [], "hard_nos": [], "kids": False, "constraints": "",
-       "share_numbers": True}
+       "share_numbers": True, "sample": False}
 
 SAMPLES = [
     {"name": SAMPLE_PREFIX + "Ana", "budget_minor": 4500, "likes": ["food", "drinks"],
-     "hard_nos": ["heights"], "kids": False, "constraints": "", "share_numbers": True},
+     "hard_nos": ["heights"], "kids": False, "constraints": "", "share_numbers": True, "sample": True},
     {"name": SAMPLE_PREFIX + "Ben", "budget_minor": 8000, "likes": ["games", "active"],
-     "hard_nos": [], "kids": False, "constraints": "", "share_numbers": False},
+     "hard_nos": [], "kids": False, "constraints": "", "share_numbers": False, "sample": True},
 ]

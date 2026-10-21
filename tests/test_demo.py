@@ -263,3 +263,47 @@ def test_demo_pages_have_no_dashes_or_kids_wording(env):
         assert "\u2014" not in t and "\u2013" not in t
         assert "kid" not in t.lower() and "child" not in t.lower()
         assert not re.search(r"\son[a-z]+\s*=", t, re.I) and "<style" not in t and "style=" not in t
+
+
+# ---- sample members are not voters ------------------------------------------------------------
+
+def top_ids(env, pid):
+    return [r.candidate.product_id for r in env.store.get_result(pid)[1].top]
+
+
+def test_sample_members_not_counted_as_voters(env):
+    c = env.browser()
+    pid = demo_plan(c)
+    cards = {m.name: m for m in env.store.cards(pid)}
+    assert cards["Sample: Ana"].sample and cards["Sample: Ben"].sample and not cards["You"].sample
+    from groupthink.fit import Member
+    assert Member.from_dict(cards["Sample: Ana"].to_dict()).sample is True
+    old = cards["You"].to_dict()
+    del old["sample"]                                 # a card stored before the flag existed
+    assert Member.from_dict(old).sample is False
+    argue(c, pid)
+    assert any(ln.speaker == "Sample: Ana" for ln in env.store.get_result(pid)[0])   # they still argue
+
+
+def test_demo_single_vote_reaches_final(env):
+    c = env.browser()
+    pid = demo_plan(c)
+    argue(c, pid)
+    first = top_ids(env, pid)[0]
+    c.post(f"/p/{pid}/vote", data={"product_id": first}, follow_redirects=False)
+    t = c.get(f"/p/{pid}/argue").text
+    assert f'data-winner="{first}" data-final="yes"' in t
+    assert "Waiting for the rest of the group" not in t and "The group picked" in t
+
+
+def test_normal_plan_still_waits_for_all_members(env):
+    from test_web import group
+    pid, host, members = group(env)                  # 3 real members
+    argue(host, pid)
+    first = top_ids(env, pid)[0]
+    host.post(f"/p/{pid}/vote", data={"product_id": first}, follow_redirects=False)
+    t = host.get(f"/p/{pid}/argue").text
+    assert 'data-final="no"' in t and "Waiting for the rest of the group" in t
+    members[0].post(f"/p/{pid}/vote", data={"product_id": first})
+    members[1].post(f"/p/{pid}/vote", data={"product_id": first})
+    assert 'data-final="yes"' in host.get(f"/p/{pid}/argue").text
