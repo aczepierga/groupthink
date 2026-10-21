@@ -8,9 +8,15 @@
 <section class="offer" aria-labelledby="cart-h">
   <h2 id="cart-h">No cart for these offers</h2>
   <div class="callout" role="status">
+    {% if runs_left %}
     <p><strong>None of these can go in a cart. Run the search again.</strong></p>
     {% if solo %}<p>LivingSocial cannot put any of your options in a cart. You can start the fight again from <a href="/p/{{ plan_id }}/card">your card page</a>.</p>
     {% else %}<p>LivingSocial cannot put any of the group's options in a cart. The host can run the argument again from the <a href="/p/{{ plan_id }}">plan page</a>.</p>{% endif %}
+    {% else %}
+    <p><strong>None of these can go in a cart.</strong></p>
+    {% if solo %}<p>You have used both searches on this plan. <a href="/">Start a new plan</a>.</p>
+    {% else %}<p>This plan has used both of its runs. <a href="/">Start a new plan</a>.</p>{% endif %}
+    {% endif %}
   </div>
 </section>
 {% else %}

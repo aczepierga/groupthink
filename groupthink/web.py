@@ -45,6 +45,9 @@ DATE_MAX, THEME_MAX, CITY_MAX = 60, 80, 60
 PURGE_EVERY = timedelta(hours=1)
 SCOUT_PATH = "A"      # strict agent enrichment (fine print) with Partner price, place and ids
 
+NOT_CARTABLE_LABEL = "LivingSocial cannot put this one in a cart"
+NOT_CARTABLE_REFUSAL = "LivingSocial cannot put that one in a cart. Choose another option."
+
 router = APIRouter()
 
 
@@ -579,8 +582,8 @@ def tally(top: list[Ranked], votes: dict, pick: str | None, voters: int = 0,
 
     `blocked` ids (LivingSocial cannot cart them) are dropped before counting, so they never win. Blocking
     does not change `final`: every vote cast still counts toward it. When the only votes went to blocked
-    options, the group already agreed and LivingSocial removed their pick, so the top-scored open option
-    wins and `final` is True.
+    options, LivingSocial removed their pick, so the top-scored open option leads; `final` follows the
+    normal rule (all `voters` have voted, or the host broke a tie).
     """
     ids = [r.candidate.product_id for r in top if r.candidate.product_id not in blocked]
     cast = sum(int(votes.get(r.candidate.product_id, 0)) for r in top)
@@ -588,6 +591,7 @@ def tally(top: list[Ranked], votes: dict, pick: str | None, voters: int = 0,
     best = max(counts.values(), default=0)
     leaders = [pid for pid in ids if counts[pid] == best]
     winner = reason = None
+    fallback = False
     if best > 0 and len(leaders) == 1:
         winner, reason = leaders[0], "most votes"
     elif pick in leaders:
@@ -596,11 +600,10 @@ def tally(top: list[Ranked], votes: dict, pick: str | None, voters: int = 0,
         winner, reason = leaders[0], "tied on votes, highest score wins"
     elif ids and cast > 0:
         winner, reason, leaders = ids[0], "their pick could not go in a cart, next best option", [ids[0]]
-        return {"counts": counts, "best": best, "leaders": leaders, "winner": winner, "reason": reason,
-                "final": True, "pickable": False}
+        fallback = True
     final = winner is not None and (reason == "the host broke the tie" or cast >= voters)
     return {"counts": counts, "best": best, "leaders": leaders, "winner": winner, "reason": reason,
-            "final": final, "pickable": len(leaders) > 1 or best == 0}
+            "final": final, "pickable": not fallback and (len(leaders) > 1 or best == 0)}
 
 
 def solo_tally(result: RankResult, pick: str | None, blocked) -> dict:
@@ -685,7 +688,7 @@ def safe_deal_url(c: Candidate) -> str | None:
     return url
 
 
-def _offer_view(r: Ranked, counts: dict, solo: bool = False) -> dict:
+def _offer_view(r: Ranked, counts: dict, solo: bool = False, blocked: bool = False) -> dict:
     c = r.candidate
     group = max(len(r.verdicts), 1)
     spend = per_member_spend_minor(c, r.quantity, group)
@@ -707,7 +710,7 @@ def _offer_view(r: Ranked, counts: dict, solo: bool = False) -> dict:
     place = c.place or "unknown"
     n_votes = counts.get(c.product_id, 0)
     return {
-        "product_id": c.product_id, "title": c.title, "option_title": c.option_title,
+        "product_id": c.product_id, "blocked": blocked, "title": c.title, "option_title": c.option_title,
         "price": fmt(c.price_minor, c.precision),
         "original": fmt(c.original_minor, c.precision) if c.original_minor and c.original_minor > c.price_minor else None,
         "original_unknown": c.original_minor is None,
@@ -771,7 +774,7 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     else:
         tal = tally(result.top, deps.store.votes(plan_id), deps.store.get_pick(plan_id),
                     sum(1 for m in cards if not m.sample), blocked)
-    offers = [_offer_view(r, tal["counts"], solo) for r in result.top]
+    offers = [_offer_view(r, tal["counts"], solo, r.candidate.product_id in blocked) for r in result.top]
     winner = next((o for o in offers if o["product_id"] == tal["winner"]), None)
     host = is_host(request, plan_id, plan)
     me = current_member(request, plan_id, cards)
@@ -781,7 +784,7 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         request, "argue.html", plan_id=plan_id, plan=plan,
         lines=[{"speaker": ln.speaker, "kind": ln.kind, "text": ln.text} for ln in lines],
         offers=offers, empty=empty, owns_hard_no=owns_hard_no, thin=_thin_view(result, plan["city"]),
-        winner=winner, final=tal["final"], reason=tal["reason"], leaders=tal["leaders"], host=host,
+        not_cartable_label=NOT_CARTABLE_LABEL, winner=winner, final=tal["final"], reason=tal["reason"], leaders=tal["leaders"], host=host,
         can_pick=host and tal["pickable"] and tal["best"] > 0 and len(tal["leaders"]) > 1,
         can_vote=me is not None and not solo, solo=solo, can_switch=solo and host and winner is not None,
         can_cart=bool(winner and tal["final"] and (host or me is not None)),
@@ -830,6 +833,8 @@ def vote(plan_id: str, request: Request, form: dict = Depends(read_form), deps: 
     ids = {r.candidate.product_id for r in got[1].top} if got else set()
     if form.get("product_id") not in ids:
         raise refuse(400, "That is not one of the options on the table.", "Bad request")
+    if form["product_id"] in store.not_cartable_ids(deps.now()):
+        raise refuse(400, NOT_CARTABLE_REFUSAL, "Bad request")
     store.put_vote(plan_id, me.id, form["product_id"])
     return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
 
@@ -842,12 +847,15 @@ def pick(plan_id: str, request: Request, form: dict = Depends(read_form), deps: 
     got = store.get_result(plan_id)
     if got is None:
         raise refuse(400, "There is nothing to pick yet.", "Bad request")
+    blocked = store.not_cartable_ids(deps.now())
+    if form.get("product_id") in blocked:
+        raise refuse(400, NOT_CARTABLE_REFUSAL, "Bad request")
     if plan_mode(plan) == "solo":
         if form.get("product_id") not in {r.candidate.product_id for r in got[1].top}:
             raise refuse(400, "That is not one of your options.", "Bad request")
         store.set_pick(plan_id, form["product_id"])
         return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
-    tal = tally(got[1].top, store.votes(plan_id), None, blocked=store.not_cartable_ids(deps.now()))
+    tal = tally(got[1].top, store.votes(plan_id), None, blocked=blocked)
     if not tal["pickable"] or form.get("product_id") not in tal["leaders"]:
         raise refuse(400, "The host only breaks ties, and only between the tied options.", "Bad request")
     store.set_pick(plan_id, form["product_id"])
@@ -877,7 +885,8 @@ def _cart_context(request, deps, plan_id):
     if got is not None:
         blocked = store.not_cartable_ids(deps.now())
         if got[1].top and all(r.candidate.product_id in blocked for r in got[1].top):
-            raise PageError(200, "cart.html", plan_id=plan_id, plan=plan, none_left=True, solo=solo)
+            raise PageError(200, "cart.html", plan_id=plan_id, plan=plan, none_left=True, solo=solo,
+                            runs_left=store.argue_count(plan_id) < MAX_RUNS)
         if solo:
             tal = solo_tally(got[1], store.get_pick(plan_id), blocked)
         else:

@@ -935,7 +935,7 @@ def test_blocked_only_voted_option_falls_to_top_scored():
     pid, host, members = group(env)
     argue(host, pid)
     top = env.store.get_result(pid)[1].top
-    for b in (host, members[0]):                       # 2 of 3 voted, all for A
+    for b in (host, *members):                         # all 3 voted for A
         b.post(f"/p/{pid}/vote", data={"product_id": top[0].candidate.product_id})
     env.store.mark_not_cartable(top[0].candidate.product_id, env.clock[0])
     r = host.get(f"/p/{pid}/cart")
@@ -993,8 +993,10 @@ def test_tally_skips_blocked_winner():
     assert plain["winner"] == "A" and plain["final"] is True
     t = web.tally(top, votes, None, 3, {"A"})
     assert t["winner"] == "B" and t["final"] is plain["final"] and "A" not in t["counts"]
-    only = web.tally(top, {"A": 2}, None, 3, {"A"})                  # the only votes went to a blocked option
+    only = web.tally(top, {"A": 3}, None, 3, {"A"})                  # every vote went to a blocked option
     assert only["winner"] == "B" and only["final"] is True and only["pickable"] is False
+    partial = web.tally(top, {"A": 1}, None, 3, {"A"})               # 1 of 3 voted: B leads, not final
+    assert partial["winner"] == "B" and partial["final"] is False
     nothing = web.tally(top, {}, None, 3, {"A"})
     assert nothing["winner"] is None and nothing["final"] is False
     assert web.tally(top, votes, None, 3, {"A", "B", "C"})["winner"] is None
@@ -1003,3 +1005,83 @@ def test_tally_skips_blocked_winner():
         ru = web._runner_up(result, t, top[0], blocked)
         assert ru is None or ru["title"] not in {"T" + b for b in blocked}
     assert web._runner_up(result, t, top[0], {"B", "C"}) is None
+
+
+def _blocked_group(env, api):
+    pid, host, members = group(env)
+    argue(host, pid)
+    top = env.store.get_result(pid)[1].top
+    env.store.mark_not_cartable(top[0].candidate.product_id, env.clock[0])
+    return pid, host, members, [r.candidate.product_id for r in top]
+
+
+def test_vote_for_blocked_option_is_400_and_stores_nothing():
+    env, api = make_env()
+    pid, host, members, ids = _blocked_group(env, api)
+    r = host.post(f"/p/{pid}/vote", data={"product_id": ids[0]})
+    assert r.status_code == 400 and "cannot put that one in a cart" in r.text
+    assert env.store.votes(pid) == {}
+    assert host.post(f"/p/{pid}/vote", data={"product_id": ids[1]}).status_code == 200
+    assert env.store.votes(pid) == {ids[1]: 1}
+
+
+def test_pick_blocked_option_is_400_group_tiebreak_and_solo():
+    env, api = make_env()
+    pid, host, members, ids = _blocked_group(env, api)
+    host.post(f"/p/{pid}/vote", data={"product_id": ids[1]})
+    members[0].post(f"/p/{pid}/vote", data={"product_id": ids[2]})   # B and C tie
+    assert host.post(f"/p/{pid}/pick", data={"product_id": ids[0]}).status_code == 400
+    assert env.store.get_pick(pid) is None
+    assert host.post(f"/p/{pid}/pick", data={"product_id": ids[1]}, follow_redirects=False).status_code == 303
+    env2, api2 = make_env()
+    spid, c, sids = solo_run(env2)
+    env2.store.mark_not_cartable(sids[1], env2.clock[0])
+    r = c.post(f"/p/{spid}/pick", data={"product_id": sids[1]})
+    assert r.status_code == 400 and not solo_words(r.text)
+    assert env2.store.get_pick(spid) is None
+
+
+def test_argue_page_hides_vote_and_pick_forms_for_blocked_offer():
+    env, api = make_env()
+    pid, host, members, ids = _blocked_group(env, api)
+    page = host.get(f"/p/{pid}/argue").text
+    art = {i: re.search(r'<article class="offer" data-product="%s">.*?</article>' % re.escape(i), page, re.S).group(0)
+           for i in ids}
+    assert "LivingSocial cannot put this one in a cart" in art[ids[0]]
+    assert "<form" not in art[ids[0]]
+    assert "Vote for this one" in art[ids[1]] and "LivingSocial cannot" not in art[ids[1]]
+    env2, api2 = make_env()
+    spid, c, sids = solo_run(env2)
+    env2.store.mark_not_cartable(sids[1], env2.clock[0])
+    spage = c.get(f"/p/{spid}/argue").text
+    sart = re.search(r'<article class="offer" data-product="%s">.*?</article>' % re.escape(sids[1]), spage, re.S).group(0)
+    assert "LivingSocial cannot put this one in a cart" in sart and "<form" not in sart
+    assert not solo_words(sart)
+
+
+def test_blocked_one_vote_of_three_leads_but_is_not_final():
+    env, api = make_env()
+    pid, host, members, ids = _blocked_group(env, api)
+    env.store.put_vote(pid, "x", ids[0])         # one vote cast, for the blocked option
+    assert host.get(f"/p/{pid}/cart").status_code == 409
+
+
+@pytest.mark.parametrize("solo", [False, True])
+def test_all_blocked_with_no_runs_left_says_start_a_new_plan(solo):
+    env, api = make_env()
+    if solo:
+        pid, c, ids = solo_run(env)
+    else:
+        pid, c, _, _ = final_group(env, api)
+        ids = [r.candidate.product_id for r in env.store.get_result(pid)[1].top]
+    argue(c, pid)                                 # second and last run
+    assert env.store.argue_count(pid) == 2
+    for i in ids:
+        env.store.mark_not_cartable(i, env.clock[0])
+    for r in (c.get(f"/p/{pid}/cart"), get_cart_link(c, pid)):
+        assert r.status_code == 200
+        t = r.text.lower()
+        assert "none of these can go in a cart" in t and "run the search again" not in t
+        assert 'href="/"' in r.text and "start a new plan" in t and "<form" not in t
+        if solo:
+            assert not solo_words(r.text)
