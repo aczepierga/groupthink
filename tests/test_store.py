@@ -278,6 +278,28 @@ def test_child_write_to_missing_plan_raises():
     assert fake.keys() == []
 
 
+def test_sqlite_child_writes_to_missing_or_expired_plan_raise(tmp_path):
+    clock = [datetime.now(timezone.utc)]
+    s = SqliteStore(str(tmp_path / "s.db"), now=lambda: clock[0])
+    writes = [lambda pid: s.put_card(pid, mem("m1")),
+              lambda pid: s.save_result(pid, [Line("Scout", "scout", "x", None)], result()),
+              lambda pid: s.put_vote(pid, "m1", "p1"),
+              lambda pid: s.set_pick(pid, "p1"),
+              lambda pid: s.record_cart(pid, "p1", "o1", "cart-a", now().isoformat())]
+    for write in writes:                     # never existed
+        with pytest.raises(PlanNotFound):
+            write("gone0000gone0000")
+    pid = s.create_plan(plan(created_at=clock[0].isoformat()))
+    for write in writes:                     # live plan: all succeed
+        write(pid)
+    clock[0] += timedelta(days=15)
+    for write in writes:                     # expired but not yet purged
+        with pytest.raises(PlanNotFound):
+            write(pid)
+    # nothing leaked in under a dead plan
+    assert s.cards("gone0000gone0000") == [] and s.votes("gone0000gone0000") == {}
+
+
 def test_cart_records_expire_with_plan():
     s, fake = _durable()
     t0 = int(fake.clock)

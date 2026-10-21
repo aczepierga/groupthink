@@ -38,7 +38,7 @@ def parse_ts(value) -> datetime:
 
 
 class PlanNotFound(Exception):
-    """DurableStore refuses a child write (card, vote, result, pick, cart) when the plan key is gone.
+    """Both stores refuse a child write (card, vote, result, pick, cart) when the plan is gone.
 
     The plan is expired or never existed; the web layer maps this to the same "expired or not found" page.
     """
@@ -94,6 +94,12 @@ class SqliteStore:
         self._db.commit()
         return plan_id
 
+    def _require_plan(self, plan_id):
+        """Child writes need a live plan (same contract as DurableStore)."""
+        row = self._db.execute("SELECT created_at FROM plans WHERE id=?", (plan_id,)).fetchone()
+        if row is None or self._now() - parse_ts(row[0]) > timedelta(days=TTL_DAYS):
+            raise PlanNotFound(plan_id)
+
     def get_plan(self, plan_id):
         row = self._db.execute("SELECT created_at, body FROM plans WHERE id=?", (plan_id,)).fetchone()
         if row is None:
@@ -103,6 +109,7 @@ class SqliteStore:
         return json.loads(row[1])
 
     def put_card(self, plan_id, member):
+        self._require_plan(plan_id)
         self._db.execute("INSERT OR REPLACE INTO cards VALUES (?,?,?)",
                          (plan_id, member.id, json.dumps(member.to_dict())))
         self._db.commit()
@@ -112,6 +119,7 @@ class SqliteStore:
         return [Member.from_dict(json.loads(r[0])) for r in rows]
 
     def save_result(self, plan_id, lines, result):
+        self._require_plan(plan_id)
         body = json.dumps({"lines": [ln.to_dict() for ln in lines], "result": result.to_dict()})
         self._db.execute(
             "INSERT INTO results VALUES (?,?,1) ON CONFLICT(plan_id) DO UPDATE SET body=excluded.body, argues=argues+1",
@@ -130,6 +138,7 @@ class SqliteStore:
         return row[0] if row else 0
 
     def put_vote(self, plan_id, member_id, product_id):
+        self._require_plan(plan_id)
         self._db.execute("INSERT OR REPLACE INTO votes VALUES (?,?,?)", (plan_id, member_id, product_id))
         self._db.commit()
 
@@ -138,6 +147,7 @@ class SqliteStore:
         return dict(Counter(r[0] for r in rows))
 
     def set_pick(self, plan_id, product_id):
+        self._require_plan(plan_id)
         self._db.execute("INSERT OR REPLACE INTO picks VALUES (?,?)", (plan_id, product_id))
         self._db.commit()
 
@@ -146,6 +156,7 @@ class SqliteStore:
         return row[0] if row else None
 
     def record_cart(self, plan_id, product_id, option_id, cart_id, created_at):
+        self._require_plan(plan_id)
         self._db.execute("INSERT OR IGNORE INTO carts (plan_id, product_id, option_id, cart_id, created_at) "
                          "VALUES (?,?,?,?,?)", (plan_id, product_id, option_id, cart_id, str(created_at)))
         self._db.commit()
