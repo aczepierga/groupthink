@@ -416,3 +416,141 @@ def test_referee_at_least_when_top_is_full():
     for seed in range(10):
         t = run_debate(res2, ms, seed, today=TODAY)[-1].text
         assert "2 options" in t and "At least" not in t
+
+
+# --- solo mode ----------------------------------------------------------------------------
+
+from groupthink.debate import FUN_CODES, SAVER_CODES, SOLO_FUN, SOLO_SAVER  # noqa: E402
+
+SOLO_NAME = "Zelda"
+
+
+def solo_fixture(likes=None, categories=True):
+    ms = [member("s0", SOLO_NAME, cap=6000, likes=likes if likes is not None else ["pottery"])]
+    cats = ["Arts & Crafts"] if categories else []
+    cands = [
+        cand("p1", title="Pottery Wheel Night at Kiln & Co", price=4500, categories=cats),
+        cand("p2", title="Axe Throwing Hour", price=3000, original=6000, expires="2026-11-15",
+             categories=cats),
+        cand("p3", title="Sunset Boat Cruise", price=9000, categories=cats),
+    ]
+    return ms, rank(cands, ms)
+
+
+GROUP_WORDS = ["group", "vote", "host", "everyone", "someone"]
+
+
+def test_solo_speakers_are_saver_and_fun_side():
+    ms, res = solo_fixture()
+    assert len(res.shortlist) == 3
+    for seed in range(20):
+        out = run_debate(res, ms, seed, today=TODAY, mode="solo")
+        speakers = {ln.speaker for ln in out if ln.kind == "advocate"}
+        assert speakers == {SOLO_SAVER, SOLO_FUN}, (seed, speakers)
+
+
+def test_solo_voice_codes():
+    ms, res = solo_fixture()
+    for seed in range(30):
+        for rnd in run_debate_traced(res, ms, seed, today=TODAY, mode="solo"):
+            for ln, code in rnd:
+                if ln.speaker == SOLO_SAVER:
+                    assert code in SAVER_CODES, (seed, code)
+                if ln.speaker == SOLO_FUN:
+                    assert code in FUN_CODES, (seed, code)
+
+
+def test_solo_fun_side_speaks_without_likes():
+    for cats in (True, False):
+        ms, res = solo_fixture(likes=[], categories=cats)
+        for seed in range(20):
+            fun = [(ln, c) for rnd in run_debate_traced(res, ms, seed, today=TODAY, mode="solo")
+                   for ln, c in rnd if ln.speaker == SOLO_FUN]
+            assert fun and all(c == "experience" for _, c in fun)
+            if cats:
+                assert any("Arts & Crafts" in ln.text for ln, _ in fun)
+
+
+def test_experience_never_in_group_mode():
+    members, res = chicago()
+    for seed in range(30):
+        codes = [c for rnd in run_debate_traced(res, members, seed, today=TODAY) for _, c in rnd]
+        assert "experience" not in codes
+
+
+def test_solo_is_deterministic():
+    ms, res = solo_fixture()
+    a = run_debate(res, ms, 11, today=TODAY, mode="solo")
+    b = run_debate(res, ms, 11, today=TODAY, mode="solo")
+    assert a == b
+
+
+def _empty(reason):
+    ms = [member("s0", SOLO_NAME, cap=6000)]
+    res = rank([], ms)
+    res.emptied_by = reason
+    res.excluded = [Excluded("x1", "Some Offer", "quantity")]
+    res.adult_dropped = 1
+    return ms, res
+
+
+def test_solo_no_group_words_anywhere():
+    scen = [solo_fixture(), solo_fixture(likes=[], categories=False)]
+    for reason in ("hard_no:bar", "budget", "kids_21", "quantity", "other", None):
+        scen.append(_empty(reason))
+    for ms, res in scen:
+        for seed in range(60):
+            out = run_debate(res, ms, seed, today=TODAY, mode="solo")
+            assert out
+            for ln in out:
+                low = ln.text.lower()
+                for w in GROUP_WORDS + [SOLO_NAME.lower()]:
+                    assert w not in low, (w, ln.text)
+                for bad in BANNED:
+                    assert bad not in low, (bad, ln.text)
+
+
+def test_solo_referee_names_top_option():
+    ms, res = solo_fixture()
+    assert res.top
+    for seed in range(10):
+        last = run_debate(res, ms, seed, today=TODAY, mode="solo")[-1]
+        assert last.kind == "referee"
+        assert last.product_id == res.top[0].candidate.product_id
+        assert res.top[0].candidate.title in last.text
+
+
+def test_solo_templates_hygiene():
+    pools = [L.SOLO_SCOUT_NONE, L.SOLO_SCOUT_ONE, L.SOLO_SCOUT_MANY, L.SOLO_SKIP_ZERO, L.SOLO_SKIP_ONE,
+             L.SOLO_SKIP_MANY, L.SOLO_REFEREE_PICK_ONE, L.SOLO_REFEREE_PICK_MANY, L.SOLO_REFEREE_NONE]
+    pools += list(L.SOLO_REFEREE_EMPTY.values())
+    for voice in L.SOLO_ADVOCATE.values():
+        pools += list(voice.values())
+    for pool in pools:
+        assert len(pool) >= 3
+        for t in pool:
+            assert not re.search(r"\d", t.replace("{", "").replace("}", "")), t
+            assert "$" not in t and "—" not in t and "–" not in t, t
+            for bad in BANNED + GROUP_WORDS:
+                assert bad not in t.lower(), (bad, t)
+            assert len(t) <= 110, (len(t), t)
+
+
+GROUP_SNAPSHOT = [
+    ("Scout", "scout", 'Shortlist time! 4 real offers made the cut: 1) Axe Throwing for Three; 2) Escape Room Hour; 3) Pottery Wheel Night at Kiln & Co; 4) Sunset Boat Cruise.', None),
+    ("Scout", "scout", "I did not have to skip anything for hard no's or the group's needs.", None),
+    ("Bo", "advocate", 'Sadly "Pottery Wheel Night at Kiln & Co" is over what I can spend!', "p1"),
+    ("Cy", "advocate", 'For "Escape Room Hour", 3 vouchers exceeds the per person limit of 1. Plan on separate checkouts.', "p4"),
+    ("Ann", "advocate", '"Axe Throwing for Three" needs an appointment with the business after we buy. Someone has to set it up.', "p2"),
+    ("Cy", "advocate", 'The party size on "Sunset Boat Cruise" is open ended, so the right quantity is not certain. 3 is only an estimate.', "p3"),
+    ("Ann", "advocate", '"Pottery Wheel Night at Kiln & Co" ticks a box on my list. Yes from me.', "p1"),
+    ("Bo", "advocate", 'I like the vibe of "Sunset Boat Cruise", but it is over my budget!', "p3"),
+    ("Referee", "referee", 'I land on "Axe Throwing for Three". It works for everyone\'s budget. 2 options do, so the host decides.', "p2"),
+]
+
+
+def test_group_mode_unchanged():
+    members, res = chicago()
+    base = run_debate(res, members, 7, today=TODAY)
+    assert base == run_debate(res, members, 7, today=TODAY, mode="group")
+    assert [(ln.speaker, ln.kind, ln.text, ln.product_id) for ln in base] == GROUP_SNAPSHOT

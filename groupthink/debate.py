@@ -21,7 +21,11 @@ from .fit import TOP_N, Member, Ranked, RankResult
 from .money import fmt
 
 FACT_PRIORITY = ["over_budget", "limit_per_person", "appointment", "may_cover_more",
-                 "matches_like", "best_discount", "voucher_soon"]
+                 "matches_like", "best_discount", "voucher_soon", "experience"]   # experience: solo only
+SOLO_SAVER = "Your Saver"
+SOLO_FUN = "Your Fun side"
+SAVER_CODES = {"best_discount", "voucher_soon", "over_budget", "fits_ok"}
+FUN_CODES = {"matches_like", "experience"}
 SOON_DAYS = 60
 DISCOUNT_MIN = 10          # a markdown under 10% is not worth arguing about
 MAX_ROUNDS = 3
@@ -119,34 +123,56 @@ def _advocate_text(rng, used, member: Member, idx: int, speaker: str, r: Ranked,
         qty=r.quantity, expires=_expires(c.voucher_expires), pct=r.discount_pct or "")
 
 
-def _scout_lines(rng, used, result: RankResult) -> list[tuple[Line, str | None]]:
+def _solo_advocate_text(rng, used, member: Member, voice: str, r: Ranked, code: str) -> str:
+    c = r.candidate
+    verdict = next((v for v in r.verdicts if v.member_id == member.id), None)
+    over = verdict.over_by_minor if verdict else 0
+    category = _clean(c.categories[0]) if c.categories else ""
+    key = "experience_plain" if code == "experience" and not category else code
+    tmpl = _pick(rng, L.SOLO_ADVOCATE[voice][key], used, member.share_numbers)
+    return tmpl.format(
+        title=_clean(c.title), over=fmt(over, c.precision),
+        cap=fmt(member.max_budget_minor, c.precision), category=category,
+        expires=_expires(c.voucher_expires), pct=r.discount_pct or "")
+
+
+def _scout_lines(rng, used, result: RankResult, solo: bool = False) -> list[tuple[Line, str | None]]:
     out: list[tuple[Line, str | None]] = []
     sl = result.shortlist
     if not sl:
-        t = _pick(rng, L.SCOUT_NONE, used)
+        t = _pick(rng, L.SOLO_SCOUT_NONE if solo else L.SCOUT_NONE, used)
     else:
         titles = "; ".join(f"{i + 1}) {_clean(r.candidate.title)}" for i, r in enumerate(sl))
-        pool = L.SCOUT_ONE if len(sl) == 1 else L.SCOUT_MANY
+        if solo:
+            pool = L.SOLO_SCOUT_ONE if len(sl) == 1 else L.SOLO_SCOUT_MANY
+        else:
+            pool = L.SCOUT_ONE if len(sl) == 1 else L.SCOUT_MANY
         t = _pick(rng, pool, used).format(count=len(sl), titles=titles)
     out.append((Line("Scout", "scout", t, None), "scout_list"))
     skipped = len(result.excluded) + max(0, result.adult_dropped)
-    pool = L.SKIP_ZERO if skipped == 0 else (L.SKIP_ONE if skipped == 1 else L.SKIP_MANY)
+    if solo:
+        pool = L.SOLO_SKIP_ZERO if skipped == 0 else (L.SOLO_SKIP_ONE if skipped == 1 else L.SOLO_SKIP_MANY)
+    else:
+        pool = L.SKIP_ZERO if skipped == 0 else (L.SKIP_ONE if skipped == 1 else L.SKIP_MANY)
     out.append((Line("Scout", "scout", _pick(rng, pool, used).format(skipped=skipped), None),
                 "scout_skip"))
     return out
 
 
-def _referee_line(rng, used, result: RankResult) -> tuple[Line, str]:
+def _referee_line(rng, used, result: RankResult, solo: bool = False) -> tuple[Line, str]:
     if result.top:
         top = result.top[0]
-        pool = L.REFEREE_PICK_ONE if len(result.top) == 1 else L.REFEREE_PICK_MANY
+        if solo:
+            pool = L.SOLO_REFEREE_PICK_ONE if len(result.top) == 1 else L.SOLO_REFEREE_PICK_MANY
+        else:
+            pool = L.REFEREE_PICK_ONE if len(result.top) == 1 else L.REFEREE_PICK_MANY
         n = len(result.top)
         fit = f"At least {n} options" if n >= TOP_N else f"{n} options"
         t = _pick(rng, pool, used).format(title=_clean(top.candidate.title), fit=fit)
         return Line("Referee", "referee", t, top.candidate.product_id), "referee_pick"
     reason = result.emptied_by
     if reason is None and not result.shortlist:
-        pool, code = L.REFEREE_NONE, "referee_none"
+        pool, code = (L.SOLO_REFEREE_NONE if solo else L.REFEREE_NONE), "referee_none"
     else:
         if reason == "budget":
             key = "budget"
@@ -156,13 +182,13 @@ def _referee_line(rng, used, result: RankResult) -> tuple[Line, str]:
             key = reason
         else:
             key = "other"
-        pool, code = L.REFEREE_EMPTY[key], f"referee_{key}"
+        pool, code = (L.SOLO_REFEREE_EMPTY if solo else L.REFEREE_EMPTY)[key], f"referee_{key}"
     return Line("Referee", "referee", _pick(rng, pool, used), None), code
 
 
 def _choose(member: Member, shortlist: list[Ranked], facts_by_option: dict[int, list[str]],
             taken: list[tuple[int, str]], first: bool,
-            said_shared: set[tuple[int, str]]) -> tuple[int, str] | None:
+            said_shared: set[tuple[int, str]], fallback: bool = True) -> tuple[int, str] | None:
     """Pick (shortlist index, code) for this member. Skips pairs this member already said, prefers a
     fact about the offer that no one has stated yet, then a different option than before."""
     said = {i for i, _ in taken}
@@ -172,6 +198,8 @@ def _choose(member: Member, shortlist: list[Ranked], facts_by_option: dict[int, 
         options.sort(key=lambda t: ((t[1], t[2]) in said_shared, t[1] in said, t[0], t[1]))
         _, i, c = options[0]
         return i, c
+    if not fallback:
+        return None
     # nothing stands out: a plain "this fits me" line about an option not yet cited
     for i, r in enumerate(shortlist):
         v = next((v for v in r.verdicts if v.member_id == member.id), None)
@@ -186,40 +214,63 @@ def _choose(member: Member, shortlist: list[Ranked], facts_by_option: dict[int, 
 
 
 def run_debate_traced(result: RankResult, members: list[Member], seed: int,
-                      today: date | None = None) -> list[list[tuple[Line, str | None]]]:
-    """Rounds of (Line, fact code or scout/referee tag). Deterministic for (result, members, seed, today)."""
+                      today: date | None = None, mode: str = "group") -> list[list[tuple[Line, str | None]]]:
+    """Rounds of (Line, fact code or scout/referee tag). Deterministic for (result, members, seed, today, mode).
+
+    mode "solo": one member's AI argues with itself as two voices (SOLO_SAVER, SOLO_FUN), second person."""
     today = today or date.today()
+    solo = mode == "solo"
     rng = random.Random(seed)
     used: set[str] = set()
-    rounds: list[list[tuple[Line, str | None]]] = [_scout_lines(rng, used, result)]
+    rounds: list[list[tuple[Line, str | None]]] = [_scout_lines(rng, used, result, solo)]
     sl = result.shortlist
-    n = len(members)
+    # one entry per speaker: (key for facts/taken, real member, personality idx, speaker name, voice, allowed codes)
+    if solo and members:
+        m0 = members[0]
+        speakers = [("solo_saver", m0, 0, SOLO_SAVER, "saver", SAVER_CODES),
+                    ("solo_fun", m0, 1, SOLO_FUN, "fun", FUN_CODES)]
+    elif solo:
+        speakers = []
+    else:
+        speakers = [(m.id, m, k, _clean(m.name) or f"Guest {k + 1}", None, None)
+                    for k, m in enumerate(members)]
+    n = len(speakers)
     if sl and n:
         best_idx = _best_discount_idx(sl)
-        facts = {m.id: {i: member_facts(m, r, i, best_idx, today) for i, r in enumerate(sl)}
-                 for m in members}
-        taken: dict[str, list[tuple[int, str]]] = {m.id: [] for m in members}
+        facts: dict[str, dict[int, list[str]]] = {}
+        for key, m, _, _, voice, allowed in speakers:
+            per = {i: member_facts(m, r, i, best_idx, today) for i, r in enumerate(sl)}
+            if voice is not None:
+                per = {i: [c for c in codes if c in allowed] for i, codes in per.items()}
+                if voice == "fun":
+                    per = {i: codes + ["experience"] for i, codes in per.items()}
+            facts[key] = per
+        taken: dict[str, list[tuple[int, str]]] = {sp[0]: [] for sp in speakers}
         said_shared: set[tuple[int, str]] = set()
         for rnd in (0, 1):
-            order = [(k, members[k]) for k in range(n)]
+            order = list(range(n))
             shift = (seed + rnd) % n
             order = order[shift:] + order[:shift]
             lines: list[tuple[Line, str | None]] = []
-            for idx, m in order:
-                pick = _choose(m, sl, facts[m.id], taken[m.id], (rnd == 0), said_shared)
+            for k in order:
+                key, m, idx, speaker, voice, _ = speakers[k]
+                pick = _choose(m, sl, facts[key], taken[key], (rnd == 0), said_shared,
+                               fallback=voice != "fun")
                 if pick is None:
                     continue
                 i, code = pick
-                taken[m.id].append(pick)
+                taken[key].append(pick)
                 if code not in MEMBER_SPECIFIC:
                     said_shared.add(pick)
-                speaker = _clean(m.name) or f"Guest {idx + 1}"
-                text = _advocate_text(rng, used, m, idx, speaker, sl[i], code)
+                if voice is None:
+                    text = _advocate_text(rng, used, m, idx, speaker, sl[i], code)
+                else:
+                    text = _solo_advocate_text(rng, used, m, voice, sl[i], code)
                 lines.append((Line(speaker, "advocate", text, sl[i].candidate.product_id), code))
             rounds.append(lines)
         rounds = [r for r in rounds if r]
     rounds_out = rounds[:MAX_ROUNDS]
-    ref = _referee_line(rng, used, result)
+    ref = _referee_line(rng, used, result, solo)
     if len(rounds_out) < MAX_ROUNDS:
         rounds_out.append([ref])
     else:
@@ -228,10 +279,10 @@ def run_debate_traced(result: RankResult, members: list[Member], seed: int,
 
 
 def run_debate_rounds(result: RankResult, members: list[Member], seed: int,
-                      today: date | None = None) -> list[list[Line]]:
-    return [[ln for ln, _ in rnd] for rnd in run_debate_traced(result, members, seed, today)]
+                      today: date | None = None, mode: str = "group") -> list[list[Line]]:
+    return [[ln for ln, _ in rnd] for rnd in run_debate_traced(result, members, seed, today, mode)]
 
 
 def run_debate(result: RankResult, members: list[Member], seed: int,
-               today: date | None = None) -> list[Line]:
-    return [ln for rnd in run_debate_rounds(result, members, seed, today) for ln in rnd]
+               today: date | None = None, mode: str = "group") -> list[Line]:
+    return [ln for rnd in run_debate_rounds(result, members, seed, today, mode) for ln in rnd]

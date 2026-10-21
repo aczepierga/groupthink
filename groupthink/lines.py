@@ -290,3 +290,125 @@ REFEREE_NONE = [
     "There is nothing to pick from yet. The host can widen the search and I go again.",
     "My search found nothing for this group. The host can widen it, then I rerun.",
 ]
+
+# --- Solo mode: one person's AI arguing with itself. Every line is second person ("you", "your") and
+# never says group, vote, host, everyone, someone or the member's name. Two voices share the debate:
+# the Saver (money facts) and the Fun side (wish list and the experience itself). {category} is the
+# offer's first category label as the API returned it; "experience_plain" is the no-category fallback.
+SOLO_ADVOCATE = {
+    "saver": {
+        "over_budget": [
+            '"{title}" is over your budget. Hard pass unless the price drops.',
+            'Too pricey for you: "{title}". Look for something cheaper.',
+            'Careful, "{title}" costs more than you wanted to spend.',
+            '"{title}" is {over} past your {cap} cap. I would skip it.',
+            'Your cap is {cap} and "{title}" busts it by {over}.',
+            '{cap} is your limit, and "{title}" runs {over} over it.',
+        ],
+        "best_discount": [
+            '"{title}" has the biggest markdown here, {pct}% off the listed price. Your wallet likes that.',
+            'Price check: "{title}" is {pct}% off its listed price, the biggest cut on the list.',
+            'If you care about price, "{title}" at {pct}% off is the biggest cut here.',
+        ],
+        "voucher_soon": [
+            'The voucher for "{title}" runs out on {expires}. Decide soon.',
+            '"{title}" has a voucher that expires {expires}. Your window is short.',
+            'Clock is ticking on "{title}": the voucher ends {expires}.',
+        ],
+        "fits_ok": [
+            '"{title}" fits your budget. No complaints from me.',
+            'You can afford "{title}". It is a safe choice.',
+            '"{title}" does not break your budget. I am fine with it.',
+        ],
+    },
+    "fun": {
+        "matches_like": [
+            '"{title}" matches something you asked for. That is a big plus.',
+            'Good match for you: "{title}". It hits your list.',
+            '"{title}" ticks a box on your list. Go for it.',
+        ],
+        "experience": [
+            '"{title}" is listed under {category}. Worth a look just for the fun of it.',
+            'Think of "{title}", filed under {category}. That is a treat for you.',
+            'Fun pick: "{title}", under {category}. Make it a day you remember.',
+        ],
+        "experience_plain": [
+            '"{title}" is the fun pick for you. Try something new.',
+            'Think of "{title}". It is a treat you can look forward to.',
+            'Fun pick: "{title}". Make it a day you remember.',
+        ],
+    },
+}
+
+SOLO_SCOUT_NONE = [
+    "I searched live and found no offers to put in front of you.",
+    "Nothing made it through my search for you. Nothing to argue about yet.",
+    "My live search came back with no offers for you this time.",
+]
+SOLO_SCOUT_ONE = [
+    "I searched live and put one real offer in front of you: {titles}.",
+    "One real offer made your shortlist: {titles}.",
+    "Here is the one offer on your shortlist: {titles}.",
+]
+SOLO_SCOUT_MANY = [
+    "I searched live and put {count} real offers in front of you: {titles}.",
+    "Shortlist time! {count} real offers made the cut for you: {titles}.",
+    "Here is your shortlist, {count} real offers: {titles}.",
+]
+SOLO_SKIP_ZERO = [
+    "I did not have to skip anything for your hard no's or your needs.",
+    "No offers were skipped for your hard no's or your needs.",
+    "Nothing clashed with your hard no's or your needs, so I skipped nothing.",
+]
+SOLO_SKIP_ONE = [
+    "I skipped {skipped} offer that clashed with your hard no's or your needs.",
+    "{skipped} offer got skipped because it clashed with your hard no's or your needs.",
+    "Skipped {skipped} offer that did not fit your hard no's or your needs.",
+]
+SOLO_SKIP_MANY = [
+    "I skipped {skipped} offers that clashed with your hard no's or your needs.",
+    "{skipped} offers got skipped because they clashed with your hard no's or your needs.",
+    "Skipped {skipped} offers that did not fit your hard no's or your needs.",
+]
+SOLO_REFEREE_PICK_ONE = [
+    'My pick for you: "{title}". It fits your budget. The choice is yours.',
+    'I land on "{title}". It works for your budget. Over to you.',
+    'Verdict: "{title}". Your budget can handle it. Take a look.',
+]
+SOLO_REFEREE_PICK_MANY = [
+    'My pick for you: "{title}". {fit} fit your budget, so you can choose another.',
+    'I land on "{title}". It works for your budget. {fit} do, so you decide.',
+    'Verdict: "{title}" first. {fit} fit your budget, you pick.',
+]
+SOLO_REFEREE_EMPTY = {
+    "budget": [
+        "Nothing fits your budget right now. Relax it and I will rerun.",
+        "No offer works for your budget. Relax it and I will go again.",
+        "Your budget rules out all of these. Relax it, then I rerun.",
+    ],
+    "hard_no": [
+        "Your hard no's ruled out all I found. Drop one and I will rerun.",
+        "A hard no cleared the whole list. Drop it and I will rerun.",
+        "Everything I found ran into a hard no. Drop one and I will go again.",
+    ],
+    "kids_21": [
+        "Age-restricted offers were left out and none remain. Try another city or theme.",
+        "I skipped age-restricted offers, and none remain. Try another city or theme.",
+        "Age-restricted offers were cut. Nothing is left, so try another city or theme.",
+    ],
+    "quantity": [
+        "Most offers lack enough vouchers and none are left. Try another city or theme.",
+        "Too few vouchers are available on most offers, and none are left. Try another city or theme.",
+        "Most offers do not have enough vouchers for you, so none are left. Try another city or theme.",
+    ],
+    "other": [
+        "Nothing fit your needs this time. Relax one and I will rerun.",
+        "No offer made it through your needs. Relax something and I go again.",
+        "Your needs ruled out most of what I found, and nothing is left. Relax one, then I rerun.",
+    ],
+}
+SOLO_REFEREE_NONE = [
+    "Nothing came back for this search. Widen it and I will rerun.",
+    "There is nothing to pick from yet. Widen your search and I go again.",
+    "My search found nothing for you. Widen it, then I rerun.",
+]
