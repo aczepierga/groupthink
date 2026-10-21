@@ -803,13 +803,51 @@ def test_solo_cart_page_needs_no_votes():
     assert env.browser().post(f"/p/{pid}/cart", data={}).status_code == 403
 
 
+SOLO_WORDS = re.compile(r"group|everyone|vote|\bhost\b|someone")
+
+
+def solo_words(page):
+    body = re.sub(r"<[^>]+>", " ", page).replace("GroupThink", "").replace("Groupon", "").lower()
+    return SOLO_WORDS.search(body)
+
+
 def test_solo_cart_page_has_no_group_words():
     env, api = make_env()
     pid, c, _ = solo_run(env)
-    def words(page):
-        body = re.sub(r"<[^>]+>", " ", page).replace("GroupThink", "").replace("Groupon", "").lower()
-        return re.search(r"group|everyone|vote|\bhost\b", body)
-
-    assert not words(get_cart_link(c, pid).text)
+    assert not solo_words(get_cart_link(c, pid).text)
     api.price = 3100
-    assert not words(get_cart_link(c, pid).text)          # the price-changed screen
+    mismatch = get_cart_link(c, pid).text
+    assert "Price changed" in mismatch and not solo_words(mismatch)
+    assert "you agree to the new price" in mismatch
+
+
+@pytest.mark.parametrize("how", ["not_cartable", "line_unavailable"])
+def test_solo_unavailable_runner_up_has_no_group_words(how):
+    env, api = make_env()
+    pid, c, _ = solo_run(env)
+    if how == "not_cartable":
+        api.fail_create = (400, {"code": "failedPrecondition", "message": "nope",
+                                 "details": {"error": "PRODUCT_NOT_CARTABLE"}})
+    else:
+        api.line_unavailable = True
+    r = get_cart_link(c, pid)
+    assert "No longer available" in r.text and "Runner-up" in r.text and "choose it" in r.text
+    assert not solo_words(r.text)
+
+
+def test_solo_error_states_have_no_group_words():
+    api = CartApi(3000)
+    env = Env(ls=CartLs(api, hits=[p_hit("p1", "Pottery Wheel Night", 3000)]))
+    api.env = env
+    pid, c, _ = solo_run(env)
+    api.fail_create = (500, {})
+    assert not solo_words(get_cart_link(c, pid).text)
+
+
+def test_impossible_split_message_has_solo_variant_and_group_text_unchanged():
+    from groupthink.cart import make_carts
+    ranked = ranked_for(3, 1, min_units=2)       # not reachable at solo quantity 1, but worded anyway
+    group = make_carts(None, None, ranked, "p").error
+    solo = make_carts(None, None, ranked, "p", solo=True).error
+    assert group.endswith("Ask the group to vote for another option.")
+    assert "choose another option" in solo and not solo_words(solo)

@@ -15,7 +15,7 @@
     <p><strong>{{ view.message }}</strong></p>
     <p>Groupon says this offer can no longer be bought, so there is no cart link and nothing was added.</p>
     {% if runner_up %}
-    {% if solo %}<p>Runner-up: {{ runner_up.title }} ({{ runner_up.price }} per voucher). To switch, pick it on the <a href="/p/{{ plan_id }}/argue">picks page</a>.</p>
+    {% if solo %}<p>Runner-up: {{ runner_up.title }} ({{ runner_up.price }} per voucher). To switch, go back to <a href="/p/{{ plan_id }}/argue">your picks</a> and choose it.</p>
     {% else %}<p>Runner-up: {{ runner_up.title }} ({{ runner_up.price }} per voucher). To switch, ask the group to vote for it on the <a href="/p/{{ plan_id }}/argue">picks page</a>.</p>{% endif %}
     {% else %}
     {% if solo %}<p>No other option is on the table. You can start the fight again from <a href="/p/{{ plan_id }}/card">your card page</a>.</p>
@@ -26,7 +26,7 @@
   {% elif new_price %}
   <div class="callout" role="status">
     <p><strong>{{ view.message }}</strong></p>
-    <p>The price shown was {{ unit }} per voucher. Groupon now charges {{ new_price }} per voucher for {{ view.quantity }} voucher{{ '' if view.quantity == 1 else 's' }}. No cart link is shown until someone agrees to the new price.</p>
+    <p>The price shown was {{ unit }} per voucher. Groupon now charges {{ new_price }} per voucher for {{ view.quantity }} voucher{{ '' if view.quantity == 1 else 's' }}. No cart link is shown until {% if solo %}you agree{% else %}someone agrees{% endif %} to the new price.</p>
     <form method="post" action="/p/{{ plan_id }}/cart">
       <input type="hidden" name="product_id" value="{{ product_id }}">
       <input type="hidden" name="expected_minor" value="{{ view.new_price_minor }}">

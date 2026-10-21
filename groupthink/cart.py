@@ -118,7 +118,8 @@ def _plain_message(ranked: Ranked, n: int) -> str | None:
 
 
 def make_carts(client, store, ranked: Ranked, plan_id: str, expected_price_minor: int | None = None,
-               now: datetime | None = None, create: bool = True, confirmed: bool = False) -> CartView:
+               now: datetime | None = None, create: bool = True, confirmed: bool = False,
+               solo: bool = False) -> CartView:
     """Reuse or create the carts for `ranked` and return what the page needs.
 
     `expected_price_minor` is the per-voucher price the person agreed to; it defaults to the price the group
@@ -144,8 +145,10 @@ def make_carts(client, store, ranked: Ranked, plan_id: str, expected_price_minor
 
     if chunks is None:
         return view(message=None, error="This offer cannot be split into checkouts that meet its minimum of "
-                    "%d voucher%s each. Ask the group to vote for another option."
-                    % (c.min_units, "" if c.min_units == 1 else "s"))
+                    "%d voucher%s each. %s"
+                    % (c.min_units, "" if c.min_units == 1 else "s",
+                       "Go back to your picks and choose another option." if solo
+                       else "Ask the group to vote for another option."))
 
     seen: list[str] = []
     live_carts: list[dict] = []

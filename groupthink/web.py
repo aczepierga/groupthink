@@ -922,7 +922,7 @@ def cart_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     accepted = deps.store.get_accepted_price(plan_id, win.candidate.option_id)
     try:
         view = make_carts(deps.ls, deps.store, win, plan_id, accepted, deps.now(), create=False,
-                          confirmed=accepted is not None)
+                          confirmed=accepted is not None, solo=plan_mode(plan) == "solo")
     except PlanNotFound:
         raise
     except Exception as exc:   # LsApiError, a missing key, a network failure: say none of it
@@ -949,7 +949,8 @@ def cart_create(plan_id: str, request: Request, form: dict = Depends(read_form),
     store = deps.store
     expected = posted if posted is not None else store.get_accepted_price(plan_id, win.candidate.option_id)
     try:
-        view = make_carts(deps.ls, store, win, plan_id, expected, deps.now(), confirmed=expected is not None)
+        view = make_carts(deps.ls, store, win, plan_id, expected, deps.now(), confirmed=expected is not None,
+                          solo=plan_mode(plan) == "solo")
         if posted is not None and _cart_ok(view):
             store.set_accepted_price(plan_id, win.candidate.option_id, posted)
     except PlanNotFound:
