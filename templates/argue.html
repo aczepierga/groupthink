@@ -78,6 +78,7 @@
     {% if o.original_unknown %}<p class="muted">Original price: unknown</p>{% endif %}
     <p>{{ o.place }}</p>
     <p>{{ o.quantity }} {{ o.party }}</p>
+    {% if o.facts %}<ul class="muted">{% for f in o.facts %}<li>{{ f }}</li>{% endfor %}</ul>{% endif %}
     <h4>Fine print</h4>
     {% if o.fine_print is none %}
       <p>Fine print: unknown, check the deal page</p>
@@ -92,6 +93,7 @@
     <h4>Heads up</h4>
     <ul>{% for w in o.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
     {% endif %}
+    {% if o.deal_url %}<p><a href="{{ o.deal_url }}" target="_blank" rel="noopener noreferrer">See the deal</a></p>{% endif %}
     {% if o.promo %}<p>Code {{ o.promo }} may lower the price</p>{% endif %}
     <p>{% if o.voucher_until %}Voucher valid until {{ o.voucher_until }}{% else %}Voucher valid until: unknown{% endif %}</p>
     <p class="votes">{{ o.votes }}</p>

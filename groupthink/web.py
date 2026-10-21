@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
 import tempfile
 import threading
@@ -19,7 +20,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse
 
+from . import demo as demo_data
 from . import limits
+from .candidates import Candidate
 from .debate import run_debate
 from .fit import Member, Ranked, RankResult, per_member_spend_minor, rank
 from .kv import Kv
@@ -274,18 +277,27 @@ def home(request: Request):
     return render(request, "new_plan.html", cities=CITIES, values=values, error=None)
 
 
-@router.post("/plans")
-def create_plan(request: Request, form: dict = Depends(read_form), deps: Deps = Depends(get_deps)):
+def _admit(request: Request, deps: Deps):
+    """Plan-creation gate shared by /plans and /demo: (ip_hash, now, None) when one more plan may be
+    created, else (None, None, the 503 or 429 response)."""
     try:
         ip_hash = hash_ip(client_ip(request))
     except RuntimeError:
         log.error("IP_SALT is not configured")
-        return render(request, "error.html", 503, title="Not ready",
-                      message="This site is not fully configured yet. Please try again later.")
+        return None, None, render(request, "error.html", 503, title="Not ready",
+                                  message="This site is not fully configured yet. Please try again later.")
     now = deps.now()
     ok, _ = limits.allow(deps.store, ip_hash, now)
     if not ok:
-        return render(request, "limit.html", 429, kind="plans")
+        return None, None, render(request, "limit.html", 429, kind="plans")
+    return ip_hash, now, None
+
+
+@router.post("/plans")
+def create_plan(request: Request, form: dict = Depends(read_form), deps: Deps = Depends(get_deps)):
+    ip_hash, now, refused = _admit(request, deps)
+    if refused is not None:
+        return refused
     values = _plan_form_values(form)
 
     def bad(message):
@@ -314,6 +326,32 @@ def create_plan(request: Request, form: dict = Depends(read_form), deps: Deps = 
         "ip_hash": ip_hash, "created_at": now.isoformat()})
     response = RedirectResponse("/p/" + plan_id, status_code=303)
     set_cookie(response, "host_" + plan_id, token)
+    return response
+
+
+@router.post("/demo")
+def create_demo(request: Request, form: dict = Depends(read_form), deps: Deps = Depends(get_deps)):
+    """A plan for one visitor with two labelled sample people, so a single browser sees a full argument.
+    Same CSRF check, rate limits and TTL as /plans; the offers it argues over are the live ones."""
+    ip_hash, now, refused = _admit(request, deps)
+    if refused is not None:
+        return refused
+    city = form.get("city", "")
+    if city not in CITIES:
+        return render(request, "error.html", 400, title="Bad request", message="Pick a city from the list.")
+    token, member_id = secrets.token_urlsafe(24), secrets.token_urlsafe(12)
+    plan_id = deps.store.create_plan({
+        "city": city, "date_text": demo_data.DATE_TEXT, "group_size": demo_data.GROUP_SIZE,
+        "theme": demo_data.THEME, "host_token_hash": _sha(token), "ip_hash": ip_hash,
+        "created_at": now.isoformat(), "demo": True})
+    people = [(member_id, demo_data.YOU)] + [(secrets.token_urlsafe(12), s) for s in demo_data.SAMPLES]
+    for mid, p in people:
+        deps.store.put_card(plan_id, Member.clean(
+            mid, p["name"], p["budget_minor"], p["likes"], p["hard_nos"], p["kids"], p["constraints"],
+            p["share_numbers"]), cap=demo_data.GROUP_SIZE)
+    response = RedirectResponse("/p/" + plan_id, status_code=303)
+    set_cookie(response, "host_" + plan_id, token)
+    set_cookie(response, "m_" + plan_id, member_id)
     return response
 
 
@@ -481,10 +519,46 @@ def _warning_lines(r: Ranked) -> list[str]:
             out.append("Needs an appointment with the business after purchase.")
         elif code == "appointment_unknown":
             out.append("Appointment requirement: unknown.")
-    # age limit is a fact about the offer, shown the same way whoever is in the group
-    if c.facts.age_21 is None:
-        out.append("Age limit: unknown.")
     return out
+
+
+def _fact_lines(c: Candidate) -> list[str]:
+    """Quiet facts about the offer, shown the same way whoever is in the group (never a warning)."""
+    if c.facts.age_21 is None:
+        return ["Age limit: not stated"]
+    return ["21+ only"] if c.facts.age_21 else []
+
+
+DEAL_HOSTS = ("livingsocial.com", "groupon.com")
+_HOST_RE = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*")
+_BAD_URL_CHARS = re.compile(r"[\s\\\x00-\x1f\x7f]")
+_BUY_SEGMENTS = {"buy", "cart", "checkout"}
+
+
+def safe_deal_url(c: Candidate) -> str | None:
+    """The public deal page for a result card, or None. Only a strict agent match carries one, and only
+    an https URL on a livingsocial.com or groupon.com host (no credentials, no odd port, no buy or cart
+    path) is ever linked. Anything else renders as no link at all."""
+    url = c.offer_url
+    if c.permalink is None or not isinstance(url, str) or not url or len(url) > 500:
+        return None
+    if _BAD_URL_CHARS.search(url):
+        return None
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or parts.username is not None or parts.password is not None:
+        return None
+    if port not in (None, 443) or not _HOST_RE.fullmatch(host):
+        return None
+    if not any(host == d or host.endswith("." + d) for d in DEAL_HOSTS):
+        return None
+    if _BUY_SEGMENTS & {seg.lower() for seg in parts.path.split("/")}:
+        return None
+    return url
 
 
 def _offer_view(r: Ranked, counts: dict) -> dict:
@@ -514,6 +588,7 @@ def _offer_view(r: Ranked, counts: dict) -> dict:
         "quantity": "Buy %d voucher%s for %d %s." % (r.quantity, "" if r.quantity == 1 else "s", group,
                                                      "person" if group == 1 else "people"),
         "party": party, "fine_print": c.fine_print, "why": why, "warnings": _warning_lines(r),
+        "facts": _fact_lines(c), "deal_url": safe_deal_url(c),
         "promo": c.promo_code, "voucher_until": _date_text(c.voucher_expires),
         "votes": "%d vote%s" % (n_votes, "" if n_votes == 1 else "s"),
     }

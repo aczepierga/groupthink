@@ -2,6 +2,7 @@
 {% block title %}GroupThink: your plan{% endblock %}
 {% block content %}
 <h1>Your group plan</h1>
+{% if plan.demo %}<p class="notice" role="note">Demo plan: Ana and Ben are sample people so you can see the argument alone. The offers are real and live.</p>{% endif %}
 <dl class="facts">
   <dt>City</dt><dd>{{ plan.city }}</dd>
   <dt>When</dt><dd>{{ plan.date_text }} (a wish, not a booking)</dd>

@@ -21,5 +21,18 @@
   <input id="theme" name="theme" type="text" maxlength="80" placeholder="date night, pottery, tacos" value="{{ values.theme }}">
   <button type="submit">Start a plan</button>
 </form>
+
+<section aria-labelledby="demo-h">
+  <h2 id="demo-h">Just looking?</h2>
+  <p class="muted">See a full argument on your own. Two sample people join you, clearly labelled. The offers are real and live.</p>
+  <form method="post" action="/demo" class="stack">
+    <label for="demo-city">City</label>
+    <select id="demo-city" name="city">
+      {% for c in cities %}<option value="{{ c }}"{% if c == "Chicago" %} selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="secondary">Try it with sample friends</button>
+  </form>
+</section>
 <p class="muted">No sign-in. You get a link to share. Plans and cards are deleted after 14 days.</p>
 {% endblock %}

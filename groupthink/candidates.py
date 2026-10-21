@@ -35,6 +35,7 @@ class Candidate:
     voucher_expires: str | None
     promo_code: str | None
     facts: Facts = field(default_factory=Facts)
+    offer_url: str | None = None   # agent offerUrl (public deal page) on a strict match; validated at render
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -109,5 +110,6 @@ def build_candidates(partner_hits: list[dict], agent_details: dict[str, dict],
                 voucher_expires=(a_opt or {}).get("voucherExpires"),
                 promo_code=(a_opt or {}).get("promoCode"),
                 facts=extract_facts(fine_print),
+                offer_url=agent["offerUrl"] if agent and isinstance(agent.get("offerUrl"), str) else None,
             ))
     return out
