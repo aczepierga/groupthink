@@ -8,6 +8,7 @@ fails a check stays Partner-only. Path "B" never calls the agent API.
 """
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 from .candidates import Candidate, build_candidates
@@ -19,6 +20,9 @@ DETAIL_CAP = 12            # agent per-offer reads per scout (keeps /argue under
 MAX_QUERIES = 4
 MAX_PRODUCTS = 30
 THIN_BELOW = 5
+BUDGET_S = 12.0            # wall clock for one scout; Vercel cuts /argue off shortly after
+READ_CUTOFF = 8 / 12       # share of the budget after which no new agent search or read starts
+QUERY_CUTOFF = 10 / 12     # share of the budget after which no new Partner query starts
 BASE_QUERIES = ["things to do", "dinner", "activities"]
 ADULT_TERMS = ["adults only", "adult night", "adults night", "adult entertainment", "adult store",
                "adult shop", "adult toys", "thc", "cannabis", "dispensary", "strip club", "sex",
@@ -97,14 +101,25 @@ def _sellable(hit: dict) -> bool:
     return hit.get("availabilityRequired") is False and hit.get("status", "active") == "active"
 
 
-def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, path: str) -> ScoutResult:
+def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, path: str,
+          budget_s: float = BUDGET_S, clock=time.monotonic) -> ScoutResult:
+    """Fetch and build candidates inside a wall-clock budget (default 12 s, i.e. 8 s for the last agent
+    read to start and 10 s for the last query). Past a cutoff nothing new starts and what was gathered is
+    returned: later offers simply stay Partner-only, and fewer queries just mean fewer products."""
     if path not in ("A", "B"):
         raise ValueError("path must be 'A' or 'B'")
+    start = clock()
+    elapsed = lambda: clock() - start                          # noqa: E731
+    read_ok = lambda: elapsed() < budget_s * READ_CUTOFF       # noqa: E731
+    query_ok = lambda: elapsed() < budget_s * QUERY_CUTOFF     # noqa: E731
     max_price = -(-(max_cap_minor * group_size) // 100)          # whole dollars, rounded up
     max_price = max_price if max_price > 0 else None
 
     tried, unique = [], {}
     for q in _queries(theme):
+        if not query_ok():
+            log.info("scout budget: no new query after %d tried", len(tried))
+            break
         tried.append(q)
         try:
             page = client.search_partner(q, city, max_price_dollars=max_price)
@@ -124,10 +139,13 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
 
     agent_details: dict[str, dict] = {}
     if path == "A" and any(_sellable(h) for h in kept):
-        summaries = _agent_summaries(client, tried, city)
+        summaries = _agent_summaries(client, tried, city, read_ok)
         fetched = 0
         for h in kept:
             if fetched >= DETAIL_CAP:
+                break
+            if not read_ok():
+                log.info("scout budget: no new agent read after %d", fetched)
                 break
             if not _sellable(h):
                 continue
@@ -150,9 +168,11 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
     return ScoutResult(candidates=candidates, queries_tried=tried, thin=thin, adult_dropped=adult_dropped)
 
 
-def _agent_summaries(client, queries: list[str], city: str) -> list[dict]:
+def _agent_summaries(client, queries: list[str], city: str, may_start=lambda: True) -> list[dict]:
     seen, out = set(), []
     for q in queries:
+        if not may_start():
+            break
         try:
             page = client.search_agent(q, city)
         except LsApiError as e:

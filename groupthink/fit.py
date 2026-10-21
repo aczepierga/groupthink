@@ -229,8 +229,13 @@ def rank(cands: list[Candidate], members: list[Member]) -> RankResult:
     excluded = [Excluded(pid, titles[pid], rs) for pid, rs in reasons.items()
                 if pid not in surviving_pids]
 
+    # `top` comes from every survivor that fits each member's budget, not just the first SHORTLIST_N: a
+    # fitting option always outscores a non-fitting one of the same product (10 per fit beats the 5-point
+    # discount term), so `best` already holds its best option. Top items missing from the cut are appended.
+    top = [r for r in best if all(v.fits_budget for v in r.verdicts)][:TOP_N]
     shortlist = best[:SHORTLIST_N]
-    top = [r for r in shortlist if all(v.fits_budget for v in r.verdicts)][:TOP_N]
+    listed = {id(r) for r in shortlist}
+    shortlist += [r for r in top if id(r) not in listed]
     emptied_by = None
     if not survivors:
         if excluded:

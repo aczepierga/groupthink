@@ -44,11 +44,12 @@
       </form>
       {% else %}<p>The host can see what it would take. Members can raise their own budget on their own card.</p>{% endif %}
     {% elif empty.kind == "hard_no" %}
-      <p><strong>Every offer was ruled out by a hard no: {{ empty.word }}.</strong> Nothing was relaxed.</p>
+      <p><strong>A hard no on someone's card emptied the list.</strong> Nothing was relaxed.</p>
       {% if owns_hard_no %}
       <form method="post" action="/p/{{ plan_id }}/relax">
+        <p>It is your hard no: <strong>{{ empty.word }}</strong>. Only you can drop it.</p>
         <input type="hidden" name="drop" value="hard_no:{{ empty.word }}">
-        <button type="submit">Drop my hard no</button>
+        <button type="submit">Drop this hard no</button>
       </form>
       {% else %}<p>Only the member who set it can drop it, from their own browser. Nothing changes until they do.</p>{% endif %}
     {% elif empty.kind == "kids_21" %}

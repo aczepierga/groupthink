@@ -4,6 +4,7 @@
 <h1>The cart</h1>
 <p class="muted">{{ plan.city }}, {{ plan.date_text }}. <a href="/p/{{ plan_id }}/argue">Back to the picks</a></p>
 {% include "_copy.html" %}
+{% if plan.demo %}<p class="callout" role="note">This is a demo plan with sample people. The cart is real: buy only if you actually want this deal.</p>{% endif %}
 
 <section class="offer" aria-labelledby="cart-h">
   <h2 id="cart-h">{{ title }}</h2>

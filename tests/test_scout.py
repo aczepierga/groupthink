@@ -355,3 +355,73 @@ def test_429_on_detail_read_stops_remaining_reads():
     r = run(c, path="A")
     assert len(c.offer_calls) == 1
     assert len(r.candidates) == 5 and all(x.fine_print is None for x in r.candidates)
+
+
+# ---- wall-clock budget (final review wave) ---------------------------------------------------------
+
+class Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+class SlowClient(FakeClient):
+    """FakeClient whose calls advance an injected clock."""
+
+    def __init__(self, clock, partner_s=0.0, agent_s=0.0, offer_s=0.0, **kw):
+        super().__init__(**kw)
+        self.clock, self.partner_s, self.agent_s, self.offer_s = clock, partner_s, agent_s, offer_s
+
+    def search_partner(self, *a, **kw):
+        self.clock.t += self.partner_s
+        return super().search_partner(*a, **kw)
+
+    def search_agent(self, *a, **kw):
+        self.clock.t += self.agent_s
+        return super().search_agent(*a, **kw)
+
+    def get_agent_offer(self, *a, **kw):
+        self.clock.t += self.offer_s
+        return super().get_agent_offer(*a, **kw)
+
+
+def test_scout_stops_agent_reads_after_8s():
+    clock = Clock()
+    ids = ["a", "b", "c", "d"]
+    c = SlowClient(clock, offer_s=5.0,
+                   partner={"massage": [hit(i, title="Deal " + i) for i in ids]},
+                   agent={"massage": [summary(i, title="Deal " + i) for i in ids]},
+                   offers={"pl-" + i: detail(i) for i in ids})
+    r = scout(c, "Chicago", "massage", 5000, 2, "A", clock=clock)
+    assert len(c.offer_calls) == 2                     # reads started at 0 s and 5 s, none at 10 s
+    assert len(r.candidates) == 4                      # the rest stay Partner-only, nothing is dropped
+    assert sum(1 for x in r.candidates if x.fine_print is not None) == 2
+
+
+def test_scout_returns_partial_after_budget():
+    clock = Clock()
+    c = SlowClient(clock, partner_s=6.0,
+                   partner={"massage": [hit("a", title="One")], "things to do": [hit("b", title="Two")],
+                            "dinner": [hit("c", title="Three")], "activities": [hit("d", title="Four")]})
+    r = scout(c, "Chicago", "massage", 5000, 2, "B", budget_s=12.0, clock=clock)
+    assert r.queries_tried == ["massage", "things to do"]      # queries start at 0 s and 6 s, not at 12 s
+    assert {x.product_id for x in r.candidates} == {"a", "b"}
+    assert len(c.partner_calls) == 2
+
+
+def test_scout_budget_scales_and_default_is_12s():
+    import inspect
+    assert inspect.signature(scout).parameters["budget_s"].default == 12.0
+    clock = Clock()
+    c = SlowClient(clock, partner_s=1.0, partner={"massage": [hit("a", title="One")]})
+    r = scout(c, "Chicago", "massage", 5000, 2, "B", budget_s=1.2, clock=clock)
+    assert len(r.queries_tried) == 1                           # 1 s elapsed is past 10/12 of 1.2 s
+
+
+def test_scout_budget_does_not_raise_when_nothing_gathered():
+    clock = Clock()
+    c = SlowClient(clock, partner_s=11.0)
+    r = scout(c, "Chicago", "massage", 5000, 2, "B", clock=clock)
+    assert r.candidates == [] and r.queries_tried == ["massage"]

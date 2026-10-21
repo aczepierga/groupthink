@@ -256,7 +256,8 @@ REFEREE_PICK_MANY = [
     'I land on "{title}". It works for everyone\'s budget. {fit} do, so the host decides.',
     'Verdict: "{title}" first. {fit} fit everyone\'s budget, host, you pick.',
 ]
-# emptied_by: name the constraint in plain words and say the host can relax it. Never auto-relax.
+# emptied_by: name the constraint in plain words and say only what the app can actually do: the host can
+# relax the budget, the member who set a hard no can drop it. Age and quantity cannot be relaxed. Never auto-relax.
 REFEREE_EMPTY = {
     "budget": [
         "Nothing fits everyone's budget right now. The host can relax the budget and I will rerun.",
@@ -264,19 +265,19 @@ REFEREE_EMPTY = {
         "Everyone's budget together rules out all of these. The host can relax it, then I rerun.",
     ],
     "hard_no": [
-        "Hard no's ruled out most of what I found, and nothing is left. The host can relax them and I will rerun.",
-        "Most of what I found ran into a hard no, and nothing is left. The host can relax them and I go again.",
-        "Hard no's cleared out most of the list and nothing is left. The host can relax them, then I rerun.",
+        "Hard no's ruled out all I found. The member who set that hard no can drop it, then the host can rerun.",
+        "A hard no cleared the whole list. The member who set that hard no can drop it, then the host can rerun.",
+        "Everything I found ran into a hard no. The member who set that hard no can drop it, then the host can rerun.",
     ],
     "kids_21": [
-        "Some age-restricted offers were left out so the plan suits everyone. The host can relax that and I rerun.",
-        "I skipped age-restricted offers so the plan suits everyone. The host can relax that and I go again.",
-        "Age-restricted offers were left out so the plan suits everyone. The host can relax that, then I rerun.",
+        "Age-restricted offers were left out so the plan suits everyone. Try another city or theme.",
+        "I skipped age-restricted offers so the plan suits everyone, and none remain. Try another city or theme.",
+        "Age-restricted offers were cut so the plan suits everyone. Nothing is left, so try another city or theme.",
     ],
     "quantity": [
-        "Most offers lack enough vouchers for the group and none are left. The host can relax that and I rerun.",
-        "Too few vouchers are available on most offers, and none are left. The host can relax that, then I rerun.",
-        "Most offers do not have enough vouchers for everyone, so none are left. The host can relax it and I rerun.",
+        "Most offers lack enough vouchers for the group and none are left. Try another city or theme.",
+        "Too few vouchers are available on most offers, and none are left. Try another city or theme.",
+        "Most offers do not have enough vouchers for everyone, so none are left. Try another city or theme.",
     ],
     "other": [
         "Nothing fit the group's needs this time. The host can relax a constraint and I will rerun.",

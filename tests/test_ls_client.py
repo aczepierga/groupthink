@@ -100,6 +100,30 @@ def test_429_gives_up_after_two_retries():
     assert len(t.calls) == 3
 
 
+def test_retry_after_sleep_capped():
+    slept = []
+    t = FakeTransport(lambda n, url: (429, {"Retry-After": "30"}, {"code": "resourceExhausted"}))
+    with pytest.raises(LsApiError) as ei:
+        LsClient(transport=t, sleep=slept.append).get_product("prod1")
+    assert ei.value.status == 429
+    assert len(t.calls) == 1                         # a wait beyond the cap is given up, not slept
+    assert all(s <= 3.0 for s in slept)
+    t = FakeTransport([(429, {"Retry-After": "2"}, {"code": "resourceExhausted"}), (200, {}, {"id": "prod1"})])
+    slept.clear()
+    assert LsClient(transport=t, sleep=slept.append).get_product("prod1") == {"id": "prod1"}
+    assert [s for s in slept if s > 0.5] == [2.0]    # a wait inside the cap is honoured
+
+
+def test_http_timeout_is_10s():
+    seen = []
+
+    def transport(method, url, headers, body, timeout):
+        seen.append(timeout)
+        return 200, {}, b'{"id": "prod1"}'
+    LsClient(transport=transport, sleep=lambda s: None).get_product("prod1")
+    assert seen == [10]
+
+
 def test_agent_offer_cached():
     t = FakeTransport([(200, {}, {"id": "a1", "permalink": "x"})])
     c = _client(t)

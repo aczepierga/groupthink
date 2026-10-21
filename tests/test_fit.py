@@ -235,3 +235,31 @@ def test_roundtrips():
     assert Verdict.from_dict(v.to_dict()) == v
     e = Excluded("p", "t", "quantity")
     assert Excluded.from_dict(e.to_dict()) == e
+
+
+def test_fit_everyone_option_below_shortlist_cut_is_found():
+    """Six offers that one member loves outscore the one that fits both budgets, so the 5-item cut drops it."""
+    words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+    loud = [cand(pid="L%d" % i, title=" ".join(words), price=5000, party=1) for i in range(6)]
+    quiet = cand(pid="Q", title="Plain Tuesday", price=500, party=1)
+    members = [member("m1", cap=10000, likes=words), member("m2", cap=1000)]
+    res = rank(loud + [quiet], members)
+    assert res.emptied_by is None
+    assert [r.candidate.product_id for r in res.top] == ["Q"]
+    assert all(all(v.fits_budget for v in r.verdicts) for r in res.top)
+    ids = [r.candidate.product_id for r in res.shortlist]
+    assert "Q" in ids and 5 <= len(ids) <= 5 + 3        # appended, never more than TOP_N over the cut
+    # no survivor fits everyone: still "budget"
+    res = rank(loud, members)
+    assert res.top == [] and res.emptied_by == "budget" and len(res.shortlist) == 5
+
+
+def test_top_is_one_option_per_product_and_at_most_three():
+    opts = [cand(pid="A", oid="a1", title="A deal", price=500, party=1),
+            cand(pid="A", oid="a2", title="A deal", price=600, party=1)]
+    others = [cand(pid=p, title=p + " deal", price=700 + i, party=1) for i, p in enumerate("BCDEFG")]
+    res = rank(opts + others, group(2, cap=5000))
+    tops = [r.candidate.product_id for r in res.top]
+    assert len(tops) == 3 and len(set(tops)) == 3
+    shortlist_ids = [id(r) for r in res.shortlist]
+    assert all(id(r) in shortlist_ids for r in res.top)

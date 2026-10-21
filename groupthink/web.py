@@ -28,7 +28,7 @@ from .candidates import Candidate
 from .cart import CartBusy, make_carts
 from .debate import run_debate
 from .fit import Member, Ranked, RankResult, per_member_spend_minor, rank
-from .kv import Kv
+from .kv import Kv, KvError
 from .ls_client import LsClient
 from .money import dollars_to_minor, fmt
 from .scout import NEARBY, THIN_BELOW, scout
@@ -50,11 +50,25 @@ router = APIRouter()
 
 # ---- wiring --------------------------------------------------------------------------------------
 
+class StorageMissing(RuntimeError):
+    """On Vercel with no Upstash configured. A per-instance SQLite file would lose plans silently."""
+
+
+def on_vercel() -> bool:
+    return bool(os.environ.get("VERCEL"))
+
+
+def storage_missing() -> bool:
+    return on_vercel() and Kv.from_env() is None
+
+
 def default_store():
-    """DurableStore when Upstash env is present, else SqliteStore at a temp path (local dev)."""
+    """DurableStore when Upstash env is present, else SqliteStore at a temp path (local dev only)."""
     kv = Kv.from_env()
     if kv is not None:
         return DurableStore(kv)
+    if on_vercel():
+        raise StorageMissing("no Upstash Redis configured")
     return SqliteStore(os.path.join(tempfile.gettempdir(), "groupthink-dev.db"))
 
 
@@ -81,6 +95,12 @@ class Deps:
                 self._ls = LsClient()
             return self._ls
 
+    def storage_missing(self) -> bool:
+        """True when no store was injected and the host (Vercel) has no durable store configured."""
+        with self._lock:
+            injected = self._store is not None
+        return not injected and storage_missing()
+
     def purge_due(self, now) -> bool:
         with self._lock:
             if self._last_purge is None or now - self._last_purge >= PURGE_EVERY:
@@ -98,6 +118,8 @@ def register(app, templates, deps: Deps):
     app.state.templates = templates
     app.add_exception_handler(PageError, _page_error)
     app.add_exception_handler(PlanNotFound, _plan_gone)
+    app.add_exception_handler(KvError, _store_down)
+    app.add_exception_handler(StorageMissing, _storage_missing)
     app.middleware("http")(_housekeeping)
     app.include_router(router)
 
@@ -127,6 +149,23 @@ async def _page_error(request, exc: PageError):
 
 async def _plan_gone(request, exc):
     return render(request, "expired.html", 410)
+
+
+def storage_missing_page(request):
+    return render(request, "error.html", 503, title="Not ready",
+                  message="GroupThink is not fully set up yet (storage missing).")
+
+
+async def _storage_missing(request, exc):
+    return storage_missing_page(request)
+
+
+async def _store_down(request, exc):
+    """Upstash unreachable or erroring: a friendly 503 that carries no exception text."""
+    log.warning("store unavailable: %s", type(exc).__name__)
+    return render(request, "error.html", 503, title="Temporarily unavailable",
+                  message="GroupThink could not reach its storage just now. Nothing was lost. "
+                          "Please try again in a minute.")
 
 
 SECURITY_HEADERS = {
@@ -160,7 +199,14 @@ async def _housekeeping(request, call_next):
         for k, v in SECURITY_HEADERS.items():
             response.headers[k] = v
         return response
-    if not path.startswith("/static/"):
+    no_storage = deps.storage_missing()
+    if no_storage and path != "/healthz" and not path.startswith("/static/"):
+        response = storage_missing_page(request)
+        for k, v in SECURITY_HEADERS.items():
+            response.headers[k] = v
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
+    if not path.startswith("/static/") and not no_storage:
         now = deps.now()
         if deps.purge_due(now):
             try:
@@ -177,9 +223,15 @@ async def _housekeeping(request, call_next):
 
 # ---- request helpers -------------------------------------------------------------------------------
 
+def trusted_ip_header() -> str:
+    """The header the host sets to the real client IP. Env TRUSTED_IP_HEADER, default x-real-ip, so a
+    change after the live header probe is a setting, not a deploy."""
+    return os.environ.get("TRUSTED_IP_HEADER", "").strip().lower() or "x-real-ip"
+
+
 def client_ip(request: Request) -> str:
-    """x-real-ip, else the first x-forwarded-for entry, else the socket peer (spike ruling)."""
-    real = request.headers.get("x-real-ip", "").strip()
+    """The trusted header (default x-real-ip), else the first x-forwarded-for entry, else the socket peer."""
+    real = request.headers.get(trusted_ip_header(), "").split(",")[0].strip()
     if real:
         return real
     first = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
@@ -189,7 +241,11 @@ def client_ip(request: Request) -> str:
 
 
 async def read_form(request: Request) -> dict:
-    if int(request.headers.get("content-length") or 0) > MAX_BODY:
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        raise refuse(400, "That form could not be read.", "Bad request")
+    if declared > MAX_BODY:
         raise refuse(413, "That form is too large.", "Too large")
     body = await request.body()
     if len(body) > MAX_BODY:
@@ -326,7 +382,7 @@ def create_plan(request: Request, form: dict = Depends(read_form), deps: Deps = 
     plan_id = deps.store.create_plan({
         "city": city, "date_text": date_text, "group_size": size,
         "theme": form.get("theme", "").strip()[:THEME_MAX], "host_token_hash": _sha(token),
-        "ip_hash": ip_hash, "created_at": now.isoformat()})
+        "ip_hash": ip_hash, "created_at": now.isoformat(), "demo": False})
     response = RedirectResponse("/p/" + plan_id, status_code=303)
     set_cookie(response, "host_" + plan_id, token)
     return response
@@ -828,6 +884,12 @@ def cart_create(plan_id: str, request: Request, form: dict = Depends(read_form),
     return _render_cart(request, plan_id, plan, result, tal, win, view)
 
 
+def _demo_flag(plan) -> str:
+    if not plan or plan.get("expired"):
+        return "unknown"
+    return "true" if plan.get("demo") else "false"
+
+
 @router.get("/admin/carts.csv")
 def admin_carts(request: Request, deps: Deps = Depends(get_deps)):
     """Order evidence for the owner: every cart we made, its live status, and whether Groupon recorded an
@@ -850,8 +912,14 @@ def admin_carts(request: Request, deps: Deps = Depends(get_deps)):
         return Response("Forbidden\n", status_code=403, media_type="text/plain")
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
-    writer.writerow(["cart_id", "plan_id", "status", "has_order", "created_at"])
+    writer.writerow(["cart_id", "plan_id", "status", "has_order", "created_at", "demo"])
+    seen, demo_by_plan = set(), {}
     for rec in deps.store.carts():
+        if rec["cart_id"] in seen:                 # a store SCAN may return the same key twice
+            continue
+        seen.add(rec["cart_id"])
+        if rec["plan_id"] not in demo_by_plan:
+            demo_by_plan[rec["plan_id"]] = _demo_flag(deps.store.get_plan(rec["plan_id"]))
         try:
             cart = deps.ls.get_cart(rec["cart_id"])
             status = str(cart.get("status") or "unknown")
@@ -859,6 +927,7 @@ def admin_carts(request: Request, deps: Deps = Depends(get_deps)):
         except Exception as exc:   # one unreadable cart must not hide the others
             log.warning("admin export: cart unreadable: %s", type(exc).__name__)
             status, has_order = "unreadable", "unknown"
-        writer.writerow([rec["cart_id"], rec["plan_id"], status, has_order, rec.get("created_at") or ""])
+        writer.writerow([rec["cart_id"], rec["plan_id"], status, has_order, rec.get("created_at") or "",
+                         demo_by_plan[rec["plan_id"]]])
     return Response(out.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="carts.csv"'})

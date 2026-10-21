@@ -512,7 +512,7 @@ def test_admin_csv_has_no_customer_fields(monkeypatch):
     api.carts["cart-2"]["status"] = "CHECKED_OUT"
     r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
     rows = list(csv.reader(io.StringIO(r.text)))
-    assert rows[0] == ["cart_id", "plan_id", "status", "has_order", "created_at"]
+    assert rows[0] == ["cart_id", "plan_id", "status", "has_order", "created_at", "demo"]
     body = {row[0]: row for row in rows[1:]}
     assert set(body) == {"cart-1", "cart-2", "cart-3"}
     assert body["cart-2"][1:4] == [pid, "CHECKED_OUT", "true"]
@@ -537,7 +537,7 @@ def test_admin_csv_empty_is_just_the_header(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", ADMIN)
     env, _ = make_env()
     r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
-    assert r.text.strip() == "cart_id,plan_id,status,has_order,created_at"
+    assert r.text.strip() == "cart_id,plan_id,status,has_order,created_at,demo"
 
 
 # ---- fix round 1: ceiling, convergence, min units, accepted price, throttle ----------------------------
@@ -695,3 +695,63 @@ def test_admin_route_throttles_wrong_tokens(monkeypatch):
     assert c.get("/admin/carts.csv", headers=dict(other, **{"X-Admin-Token": ADMIN})).status_code == 200
     env.advance(hours=1)                                  # a new hour, a new allowance
     assert c.get("/admin/carts.csv", headers=dict(ip, **{"X-Admin-Token": ADMIN})).status_code == 200
+
+
+# ---- final review wave: demo carts are real, CSV hygiene -----------------------------------------------
+
+DEMO_NOTICE = "This is a demo plan with sample people. The cart is real: buy only if you actually want this deal."
+
+
+def demo_cart(env, api):
+    """A demo plan whose only voter (the visitor) voted for the top option. Returns (browser, pid)."""
+    c = env.browser()
+    r = c.post("/demo", data={"city": "Chicago"}, headers={"x-real-ip": "203.0.113.50"}, follow_redirects=False)
+    assert r.status_code == 303, r.text
+    pid = r.headers["location"].rsplit("/", 1)[1]
+    argue(c, pid)
+    top = env.store.get_result(pid)[1].top[0]
+    assert c.post(f"/p/{pid}/vote", data={"product_id": top.candidate.product_id}).status_code == 200
+    return c, pid
+
+
+def test_demo_cart_page_shows_demo_notice():
+    env, api = make_env()
+    c, pid = demo_cart(env, api)
+    assert env.store.get_plan(pid)["demo"] is True
+    for r in (c.get(f"/p/{pid}/cart"), get_cart_link(c, pid)):
+        assert r.status_code == 200
+        assert DEMO_NOTICE in r.text
+    # a real plan carries no such notice, and its flag is stored as False
+    pid2, host, _, _ = final_group(env, api)
+    assert env.store.get_plan(pid2)["demo"] is False
+    assert DEMO_NOTICE not in get_cart_link(host, pid2).text
+
+
+def test_admin_csv_has_demo_column(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", ADMIN)
+    env, api = make_env()
+    c, demo_pid = demo_cart(env, api)
+    get_cart_link(c, demo_pid)
+    real_pid, host, _, _ = final_group(env, api)
+    get_cart_link(host, real_pid)
+    r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
+    rows = list(csv.reader(io.StringIO(r.text)))
+    assert rows[0][-1] == "demo" and len(rows[0]) == 6
+    by_plan = {row[1]: row[5] for row in rows[1:]}
+    assert by_plan == {demo_pid: "true", real_pid: "false"}
+
+
+def test_admin_csv_dedupes_cart_ids(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", ADMIN)
+    env, api = make_env(fine=("Limit 1 per person.",))
+    pid, host, _, _ = final_group(env, api)
+    get_cart_link(host, pid)
+    real = env.store.carts
+
+    def scan_repeats():
+        rows = real()
+        return rows + rows[:2]            # a SCAN may return a key more than once
+    env.store.carts = scan_repeats
+    r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
+    ids = [row[0] for row in list(csv.reader(io.StringIO(r.text)))[1:]]
+    assert sorted(ids) == ["cart-1", "cart-2", "cart-3"]

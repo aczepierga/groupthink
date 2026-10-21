@@ -7,7 +7,7 @@
   <p class="error" role="alert">This plan already has all {{ plan.group_size }} cards, so it is full.</p>
 {% else %}
   <p>Private: only you see this card. Your bot argues in general terms ("over my budget") unless you tick "say my numbers".</p>
-  {% if saved %}<p class="notice" role="status">Saved. You can edit your card until the host starts the argument, and again if the group relaxes a rule.</p>{% endif %}
+  {% if saved %}<p class="notice" role="status">Saved. You can edit your card until the host reruns the argument.</p>{% endif %}
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   {% if relax_word %}
   <form method="post" action="/p/{{ plan_id }}/relax" class="stack callout">
@@ -25,8 +25,9 @@
     <input id="likes" name="likes" type="text" placeholder="pottery, tacos, live music" value="{{ values.likes }}">
     <label for="hard_nos">Hard no's (separate with commas)</label>
     <input id="hard_nos" name="hard_nos" type="text" placeholder="karaoke, heights" value="{{ values.hard_nos }}">
-    <label for="constraints">Anything else (kids, diet, mobility)</label>
-    <textarea id="constraints" name="constraints" rows="3" maxlength="280">{{ values.constraints }}</textarea>
+    <label for="constraints">Anything else (diet, mobility)</label>
+    <p class="muted" id="constraints-help">A note for yourself. GroupThink does not filter on this yet; use hard no's for things you must avoid.</p>
+    <textarea id="constraints" name="constraints" rows="3" maxlength="280" aria-describedby="constraints-help">{{ values.constraints }}</textarea>
     <label class="check"><input type="checkbox" name="kids"{% if values.kids %} checked{% endif %}> There will be kids with us</label>
     <label class="check"><input type="checkbox" name="share_numbers"{% if values.share_numbers %} checked{% endif %}> Let my bot say my numbers (my budget and by how much an offer is over it)</label>
     <button type="submit">Save my card</button>

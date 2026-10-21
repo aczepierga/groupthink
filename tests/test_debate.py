@@ -310,10 +310,24 @@ def test_referee_emptied_by_names_constraint_and_offers_relax():
         last = out[-1]
         assert last.kind == "referee" and last.product_id is None
         assert needle in last.text.lower()
-        assert "relax" in last.text.lower() and "host" in last.text.lower()
+        assert ("host" in last.text.lower()) == (reason in ("budget", "hard_no:bar"))
         assert "bar" not in last.text.lower().replace("budget", "")
 
 
+def test_referee_empty_lines_match_relax_capabilities():
+    """The app can relax the budget (host) and drop a hard no (its owner). It cannot relax age or quantity."""
+    for t in L.REFEREE_EMPTY["hard_no"]:
+        low = t.lower()
+        assert "member who set that hard no can drop it" in low and "host can rerun" in low, t
+        assert "relax" not in low, t
+    for t in L.REFEREE_EMPTY["budget"]:
+        assert "relax" in t.lower() and "host" in t.lower(), t
+    for key in ("kids_21", "quantity"):
+        for t in L.REFEREE_EMPTY[key]:
+            low = t.lower()
+            assert "relax" not in low and "rerun" not in low, t
+            assert "another city or theme" in low, t
+            assert "kid" not in low, t
 def test_budget_emptied_still_has_advocates():
     members = [member("m0", "Ann", cap=1000), member("m1", "Bo", cap=1000)]
     res = rank([cand(price=9000)], members)

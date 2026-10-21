@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from groupthink import limits
+from groupthink import web
+from groupthink.kv import KvError
 from groupthink.ls_client import LsApiError, LsClient
 from groupthink.scout import NEARBY
 from groupthink.store import PlanNotFound, SqliteStore
@@ -984,7 +986,9 @@ def test_drop_hard_no_button_only_for_owner():
     assert form not in env.browser().get(f"/p/{pid}/argue").text
     owner = bo.get(f"/p/{pid}/argue").text
     assert form in owner and 'value="hard_no:karaoke"' in owner
-    assert "karaoke" in host.get(f"/p/{pid}/argue").text      # the constraint is still named
+    # the constraint is named to everyone, but the word is only for the member who set it
+    assert "emptied the list" in host.get(f"/p/{pid}/argue").text
+    assert "karaoke" not in host.get(f"/p/{pid}/argue").text.lower()
 
 
 def test_results_visible_without_js_or_when_script_fails(env):
@@ -1031,3 +1035,108 @@ def test_card_cap_is_enforced_by_the_store():
     r = c.post(f"/p/{pid}/card", data={"name": "Ann", "budget": "50"}, follow_redirects=False)
     assert r.status_code == 409 and "full" in r.text.lower()
     assert "m_" + pid not in c.cookies
+
+
+# ---- final review wave -------------------------------------------------------------------------------
+
+CSP = "Content-Security-Policy"
+
+
+def test_vercel_without_kv_returns_503(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setattr(web, "default_store", lambda: pytest.fail("fell back to a per-instance store"))
+    c = TestClient(create_app(), base_url="https://testserver")
+    form = {"city": "Chicago", "date_text": "Sat", "group_size": "3", "theme": ""}
+    for r in (c.get("/"), c.get("/p/abc"), c.get("/p/abc/argue"), c.get("/admin/carts.csv"),
+              c.post("/plans", data=form), c.post("/demo", data={"city": "Chicago"})):
+        assert r.status_code == 503, r.request.url
+        assert "GroupThink is not fully set up yet (storage missing)." in r.text
+        assert CSP in r.headers
+    r = c.get("/healthz")
+    assert r.status_code == 503 and r.json() == {"ok": False, "storage": "missing"}
+    # with Upstash configured the same deployment is healthy
+    monkeypatch.setattr(web, "default_store", lambda: SqliteStore(":memory:"))
+    monkeypatch.setenv("KV_REST_API_URL", "https://kv.example.test")
+    monkeypatch.setenv("KV_REST_API_TOKEN", "tok")
+    r = c.get("/healthz")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+
+
+def test_local_without_kv_still_uses_sqlite(monkeypatch, tmp_path):
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    assert isinstance(web.default_store(), SqliteStore)
+    c = TestClient(create_app(), base_url="https://testserver")
+    assert c.get("/").status_code == 200
+    assert c.get("/healthz").json() == {"ok": True}
+
+
+def test_kv_error_renders_503_with_security_headers():
+    class Down(SqliteStore):
+        def get_plan(self, plan_id):
+            raise KvError("KV HTTP 500: upstash-secret-detail")
+
+    c = Env(store=Down(":memory:")).browser()
+    for r in (c.get("/p/abc"), c.post("/p/abc/card", data={"name": "Ann", "budget": "5"})):
+        assert r.status_code == 503
+        assert "upstash-secret-detail" not in r.text and "KvError" not in r.text
+        assert "try again" in r.text.lower()
+        assert "default-src 'self'" in r.headers[CSP]
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["referrer-policy"] == "same-origin"
+        assert r.headers["cache-control"] == "no-store"
+
+
+def test_trusted_ip_header_env_override(monkeypatch):
+    def req(headers):
+        return Request({"type": "http", "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+                        "client": ("8.8.8.8", 1)})
+    both = {"x-real-ip": "1.1.1.1", "x-vercel-forwarded-for": "5.5.5.5", "x-forwarded-for": "2.2.2.2"}
+    monkeypatch.delenv("TRUSTED_IP_HEADER", raising=False)
+    assert client_ip(req(both)) == "1.1.1.1"                       # default stays x-real-ip
+    monkeypatch.setenv("TRUSTED_IP_HEADER", "X-Vercel-Forwarded-For")
+    assert client_ip(req(both)) == "5.5.5.5"
+    assert client_ip(req({"x-real-ip": "1.1.1.1", "x-forwarded-for": "2.2.2.2"})) == "2.2.2.2"
+    monkeypatch.setenv("TRUSTED_IP_HEADER", "  ")
+    assert client_ip(req(both)) == "1.1.1.1"
+
+
+def test_emptying_hard_no_word_only_visible_to_owner():
+    env = karaoke_env()
+    host = env.browser()
+    pid = new_plan(host, group_size="2")
+    card(host, pid, "Ann", "50")
+    bo = env.browser()
+    card(bo, pid, "Bo", "50", hard_nos="karaoke")
+    argue(host, pid)
+    for who in (host, env.browser()):
+        t = who.get(f"/p/{pid}/argue").text
+        assert "a hard no on someone" in t.lower() and "emptied the list" in t
+        assert "karaoke" not in t.lower() and "Drop this hard no" not in t
+        assert f'action="/p/{pid}/relax"' not in t
+    owner = bo.get(f"/p/{pid}/argue").text
+    assert "emptied the list" in owner
+    assert "karaoke" in owner and "Drop this hard no" in owner and 'value="hard_no:karaoke"' in owner
+
+
+def test_card_help_text_and_edit_copy(env):
+    c = env.browser()
+    pid = new_plan(c)
+    t = c.get(f"/p/{pid}/card").text
+    assert ("A note for yourself. GroupThink does not filter on this yet; use hard no's for things "
+            "you must avoid.") in t
+    r = c.post(f"/p/{pid}/card", data={"name": "Ann", "budget": "50", "constraints": "vegan"},
+               follow_redirects=True)
+    assert "You can edit your card until the host reruns the argument." in r.text
+    assert "until the host starts" not in r.text
+    assert "vegan" in c.get(f"/p/{pid}/card").text             # still the owner's private field
+    assert "vegan" not in env.browser().get(f"/p/{pid}").text
+
+
+def test_bad_content_length_400(env):
+    c = env.browser()
+    for bad in ("abc", "-", "1.5", "12 34"):
+        r = c.post("/plans", content=b"city=Chicago", headers={
+            "content-length": bad, "content-type": "application/x-www-form-urlencoded"})
+        assert r.status_code == 400, bad
+        assert "Traceback" not in r.text

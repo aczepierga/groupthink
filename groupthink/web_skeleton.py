@@ -39,7 +39,9 @@ def create_app(kv_factory=Kv.from_env, egress_transport=urllib_transport, store=
     app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
     @app.get("/healthz")
-    def healthz():
+    def healthz(request: Request):
+        if request.app.state.deps.storage_missing():
+            return JSONResponse({"ok": False, "storage": "missing"}, status_code=503)
         return {"ok": True}
 
     probes = APIRouter(prefix="/_probe", dependencies=[Depends(_probes_enabled)])

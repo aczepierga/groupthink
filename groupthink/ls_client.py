@@ -23,6 +23,8 @@ PARTNER_PREFIX = "/partner_storefront"
 AGENT_PREFIX = "/ls_agent_api"
 CACHE_TTL_S = 3600
 MAX_429_RETRIES = 2
+TIMEOUT_S = 10             # per HTTP call; /argue has a 12 s wall-clock budget (scout)
+MAX_RETRY_AFTER_S = 3.0    # a longer Retry-After is not waited out: that call gives up with the 429
 # requests per minute (50% of the documented limits)
 BUDGETS = {"partner": 300, "agent_search": 30, "agent_read": 300}
 
@@ -94,7 +96,7 @@ class _Bucket:
 
 
 class LsClient:
-    def __init__(self, transport=urllib_transport, sleep=time.sleep, clock=time.monotonic, timeout=40):
+    def __init__(self, transport=urllib_transport, sleep=time.sleep, clock=time.monotonic, timeout=TIMEOUT_S):
         self._transport = transport
         self._sleep = sleep
         self._clock = clock
@@ -123,8 +125,10 @@ class LsClient:
             ms = int((self._clock() - t0) * 1000)
             log.info(redact("%s %s -> %s (%d ms)" % (method, path, status, ms)))
             if status == 429 and attempt < MAX_429_RETRIES:
-                self._sleep(self._retry_after(rheaders, raw))
-                continue
+                wait = self._retry_after(rheaders, raw)
+                if wait <= MAX_RETRY_AFTER_S:
+                    self._sleep(wait)
+                    continue
             break
         parsed = self._parse(raw)
         if not 200 <= status < 300:
@@ -135,7 +139,7 @@ class LsClient:
     def _retry_after(rheaders, raw):
         lowered = {str(k).lower(): v for k, v in (rheaders or {}).items()}
         try:
-            return min(float(lowered.get("retry-after", 2)), 30.0)
+            return max(float(lowered.get("retry-after", 2)), 0.0)
         except (TypeError, ValueError):
             return 2.0
 
