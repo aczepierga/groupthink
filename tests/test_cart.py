@@ -11,7 +11,7 @@ import pytest
 
 from groupthink import config
 from groupthink.ls_client import LsClient
-from test_web import KEY, REQUIRED_COPY, T0, Env, FakeLs, argue, group, p_hit
+from test_web import KEY, REQUIRED_COPY, T0, Env, FakeLs, argue, card, group, new_solo, p_hit
 
 BUY_HOST = "checkout.groupon.test"
 API_HOST = urlsplit(config.BASE_URL).netloc
@@ -755,3 +755,61 @@ def test_admin_csv_dedupes_cart_ids(monkeypatch):
     r = env.browser().get("/admin/carts.csv", headers={"X-Admin-Token": ADMIN})
     ids = [row[0] for row in list(csv.reader(io.StringIO(r.text)))[1:]]
     assert sorted(ids) == ["cart-1", "cart-2", "cart-3"]
+
+
+# ---- solo plans ----------------------------------------------------------------------------------
+
+def solo_run(env):
+    c = env.browser()
+    pid = new_solo(c)
+    card(c, pid, "Ann", "50")
+    argue(c, pid)
+    return pid, c, [r.candidate.product_id for r in env.store.get_result(pid)[1].top]
+
+
+def test_solo_pick_another_then_cart():
+    env, api = make_env()
+    pid, c, ids = solo_run(env)
+    assert len(ids) >= 2
+    r = c.post(f"/p/{pid}/pick", data={"product_id": ids[1]}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/p/{pid}/argue"
+    page = c.get(f"/p/{pid}/argue").text
+    assert re.search(r'data-winner="%s"' % re.escape(ids[1]), page)
+    r = get_cart_link(c, pid)
+    assert r.status_code == 200
+    assert len(api.posts) == 1
+    item = api.posts[0]["items"][0]
+    assert item["productId"] == ids[1] and item["quantity"] == 1
+    assert item["expectedPrice"] == env.store.get_result(pid)[1].top[1].candidate.price_minor
+
+
+def test_solo_pick_rejects_non_top_option():
+    env, api = make_env()
+    pid, c, ids = solo_run(env)
+    assert c.post(f"/p/{pid}/pick", data={"product_id": "zzz"}).status_code == 400
+    assert c.post(f"/p/{pid}/pick", data={}).status_code == 400
+    assert env.store.get_pick(pid) is None
+    assert env.browser().post(f"/p/{pid}/pick", data={"product_id": ids[1]}).status_code == 403
+
+
+def test_solo_cart_page_needs_no_votes():
+    env, api = make_env()
+    pid, c, ids = solo_run(env)
+    assert env.store.votes(pid) == {}
+    r = get_cart_link(c, pid)
+    assert r.status_code == 200
+    assert api.posts[0]["items"][0]["productId"] == ids[0]
+    assert REQUIRED_COPY in c.get(f"/p/{pid}/cart").text
+    assert env.browser().post(f"/p/{pid}/cart", data={}).status_code == 403
+
+
+def test_solo_cart_page_has_no_group_words():
+    env, api = make_env()
+    pid, c, _ = solo_run(env)
+    def words(page):
+        body = re.sub(r"<[^>]+>", " ", page).replace("GroupThink", "").replace("Groupon", "").lower()
+        return re.search(r"group|everyone|vote|\bhost\b", body)
+
+    assert not words(get_cart_link(c, pid).text)
+    api.price = 3100
+    assert not words(get_cart_link(c, pid).text)          # the price-changed screen

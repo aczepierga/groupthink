@@ -4,14 +4,19 @@
 <h1>Relax a rule</h1>
 {% if kind == "budget" %}
   <p>Nothing was changed. The cheapest option the bots found is <strong>{{ cheapest.spend }} per person</strong> ({{ cheapest.title }}).</p>
-  <p>Budgets are private, so only each member can raise their own. Ask the group: anyone who is happy to go up to that amount can change their number on their own card.</p>
+  {% if solo %}<p>Your budget is private. If you are happy to go up to that amount, change your number on your card.</p>
+  {% else %}<p>Budgets are private, so only each member can raise their own. Ask the group: anyone who is happy to go up to that amount can change their number on their own card.</p>{% endif %}
 {% else %}
   <p>Done. Your hard no <strong>{{ word }}</strong> was dropped from your card. Nothing else changed.</p>
 {% endif %}
-{% if host and runs_left > 0 %}
+{% if solo and runs_left > 0 %}
+  <p>When your card is ready, press "Start the fight" on your card page again. {{ runs_left }} fight{% if runs_left != 1 %}s{% endif %} left for this plan.</p>
+{% elif solo %}
+  <p>This plan has used both of its fights. Start a new plan to argue again.</p>
+{% elif host and runs_left > 0 %}
   <p>When the cards are ready, the host presses "Let them argue" on the plan page again. {{ runs_left }} run{% if runs_left != 1 %}s{% endif %} left for this plan.</p>
 {% elif runs_left <= 0 %}
   <p>This plan has used both of its runs. Start a new plan to argue again.</p>
 {% endif %}
-<p><a class="button" href="/p/{{ plan_id }}">Back to the plan</a></p>
+<p><a class="button" href="/p/{{ plan_id }}{% if solo %}/card{% endif %}">{% if solo %}Back to my card{% else %}Back to the plan{% endif %}</a></p>
 {% endblock %}

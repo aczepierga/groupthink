@@ -2,7 +2,7 @@
 {% block title %}GroupThink: the argument{% endblock %}
 {% block content %}
 <h1>The argument</h1>
-<p class="muted">{{ plan.city }}, {{ plan.date_text }}. <a href="/p/{{ plan_id }}">Back to the plan</a></p>
+<p class="muted">{{ plan.city }}, {{ plan.date_text }}. {% if solo %}<a href="/p/{{ plan_id }}/card">Edit my card</a>{% else %}<a href="/p/{{ plan_id }}">Back to the plan</a>{% endif %}</p>
 
 <section aria-labelledby="debate-h">
   <h2 id="debate-h">What the bots say</h2>
@@ -34,7 +34,29 @@
 
   {% if empty %}
   <div class="callout" role="status">
-    {% if empty.kind == "budget" %}
+    {% if solo and empty.kind == "budget" %}
+      <p><strong>No offer fits your budget.</strong>
+      {% if empty.cheapest %}The cheapest option is {{ empty.cheapest.spend }} ({{ empty.cheapest.title }}).{% endif %}</p>
+      {% if host %}
+      <form method="post" action="/p/{{ plan_id }}/relax">
+        <input type="hidden" name="drop" value="budget">
+        <button type="submit">Show me what it would take</button>
+      </form>
+      {% endif %}
+    {% elif solo and empty.kind == "hard_no" %}
+      <p><strong>A hard no on your card emptied the list.</strong> Nothing was relaxed.</p>
+      {% if owns_hard_no %}
+      <form method="post" action="/p/{{ plan_id }}/relax">
+        <p>It is your hard no: <strong>{{ empty.word }}</strong>. Only you can drop it.</p>
+        <input type="hidden" name="drop" value="hard_no:{{ empty.word }}">
+        <button type="submit">Drop this hard no</button>
+      </form>
+      {% else %}<p>Only the person who made this plan can drop it, from their own browser. Nothing changes until they do.</p>{% endif %}
+    {% elif solo and empty.kind == "kids_21" %}
+      <p><strong>Some 21+ offers were left out because kids are coming.</strong> Nothing was relaxed.</p>
+    {% elif solo and empty.kind == "quantity" %}
+      <p><strong>Every offer left cannot be bought in the quantity you need.</strong> Nothing was relaxed.</p>
+    {% elif empty.kind == "budget" %}
       <p><strong>No offer fits everyone's budget.</strong>
       {% if empty.cheapest %}The cheapest option is {{ empty.cheapest.spend }} per person ({{ empty.cheapest.title }}).{% endif %}</p>
       {% if host %}
@@ -59,11 +81,21 @@
     {% else %}
       <p><strong>No offers were found for this plan.</strong> Nothing was padded in.</p>
     {% endif %}
-    {% if runs < max_runs and host %}<p class="muted">After a change, press "Let them argue" on the plan page again (run {{ runs + 1 }} of {{ max_runs }}).</p>{% endif %}
+    {% if runs < max_runs and host and solo %}<p class="muted">After a change, press "Start the fight" on <a href="/p/{{ plan_id }}/card">your card page</a> again (fight {{ runs + 1 }} of {{ max_runs }}).</p>
+    {% elif runs < max_runs and host %}<p class="muted">After a change, press "Let them argue" on the plan page again (run {{ runs + 1 }} of {{ max_runs }}).</p>{% endif %}
   </div>
   {% endif %}
 
-  {% if winner %}
+  {% if winner and solo %}
+  <p class="winner" data-winner="{{ winner.product_id }}" data-final="yes"><span class="tag">WINNER</span> {{ winner.title }} <span class="muted">({{ reason }})</span></p>
+  <p class="muted">The cart link comes next. Remember the voucher does not book a date or time.</p>
+  {% if can_cart %}
+  <form method="post" action="/p/{{ plan_id }}/cart">
+    <input type="hidden" name="product_id" value="{{ winner.product_id }}">
+    <button type="submit">Get the cart link</button>
+  </form>
+  {% endif %}
+  {% elif winner %}
   <p class="winner" data-winner="{{ winner.product_id }}" data-final="{{ 'yes' if final else 'no' }}">{% if final %}The group picked{% else %}Leading so far{% endif %}: {{ winner.title }} <span class="muted">({{ reason }})</span></p>
   {% if final %}<p class="muted">The cart link comes next. Remember the voucher does not book a date or time.</p>
   {% if can_cart %}
@@ -94,7 +126,7 @@
     {% else %}
       <p>Fine print: none listed on the offer</p>
     {% endif %}
-    <h4>Why it fits everyone</h4>
+    <h4>{% if solo %}Why it fits you{% else %}Why it fits everyone{% endif %}</h4>
     <ul>{% for w in o.why %}<li>{{ w }}</li>{% endfor %}</ul>
     {% if o.warnings %}
     <h4>Heads up</h4>
@@ -103,7 +135,13 @@
     {% if o.deal_url %}<p><a href="{{ o.deal_url }}" target="_blank" rel="noopener noreferrer">See the deal</a></p>{% endif %}
     {% if o.promo %}<p>Code {{ o.promo }} may lower the price</p>{% endif %}
     <p>{% if o.voucher_until %}Voucher valid until {{ o.voucher_until }}{% else %}Voucher valid until: unknown{% endif %}</p>
-    <p class="votes">{{ o.votes }}</p>
+    {% if not solo %}<p class="votes">{{ o.votes }}</p>{% endif %}
+    {% if can_switch and o.product_id != winner.product_id %}
+    <form method="post" action="/p/{{ plan_id }}/pick">
+      <input type="hidden" name="product_id" value="{{ o.product_id }}">
+      <button type="submit" class="secondary">Pick this one instead</button>
+    </form>
+    {% endif %}
     {% if can_vote %}
     <form method="post" action="/p/{{ plan_id }}/vote">
       <input type="hidden" name="product_id" value="{{ o.product_id }}">
@@ -118,6 +156,6 @@
     {% endif %}
   </article>
   {% endfor %}
-  {% if offers and not can_vote %}<p class="muted">To vote, open your own card from the link you were sent, then come back here.</p>{% endif %}
+  {% if offers and not can_vote and not solo %}<p class="muted">To vote, open your own card from the link you were sent, then come back here.</p>{% endif %}
 </section>
 {% endblock %}

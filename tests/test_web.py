@@ -1140,3 +1140,236 @@ def test_bad_content_length_400(env):
             "content-length": bad, "content-type": "application/x-www-form-urlencoded"})
         assert r.status_code == 400, bad
         assert "Traceback" not in r.text
+
+
+# ---- solo (1 player) plans ----------------------------------------------------------------
+
+SOLO_FORM = {"city": "Chicago", "date_text": "Saturday", "theme": ""}
+
+
+def new_solo(c, ip="203.0.113.10", **over):
+    form = dict(SOLO_FORM)
+    form.update(over)
+    r = c.post("/solo", data=form, headers={"x-real-ip": ip}, follow_redirects=False)
+    assert r.status_code == 303, r.text
+    m = re.fullmatch(r"/p/([A-Za-z0-9_-]+)/card", r.headers["location"])
+    assert m, r.headers["location"]
+    return m.group(1)
+
+
+def solo_ready(env, budget="50", **card_kw):
+    """A solo host with a saved card and one finished run. Returns (pid, browser)."""
+    c = env.browser()
+    pid = new_solo(c)
+    card(c, pid, "Ann", budget, **card_kw)
+    argue(c, pid)
+    return pid, c
+
+
+def visible_text(html_text):
+    t = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html_text, flags=re.S)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return t.replace("GroupThink", "").replace("Groupon", "").replace("groupon", "").lower()
+
+
+SOLO_BANNED = re.compile(r"group|everyone|vote|\bhost\b")
+
+
+def no_group_words(html_text):
+    hit = SOLO_BANNED.search(visible_text(html_text))
+    assert not hit, hit.group(0)
+
+
+def test_solo_creates_one_seat_plan_and_goes_to_card(env):
+    c = env.browser()
+    r = c.post("/solo", data=SOLO_FORM, follow_redirects=False)
+    assert r.status_code == 303
+    m = re.fullmatch(r"/p/([A-Za-z0-9_-]+)/card", r.headers["location"])
+    assert m
+    pid = m.group(1)
+    plan = env.store.get_plan(pid)
+    assert plan["group_size"] == 1 and plan["mode"] == "solo" and plan["demo"] is False
+    sc = r.headers["set-cookie"].lower()
+    assert f"host_{pid}=".lower() in sc and "httponly" in sc and "secure" in sc
+    assert web.plan_mode(plan) == "solo"
+
+
+def test_group_and_demo_plans_store_group_mode(env):
+    c = env.browser()
+    pid = new_plan(c)
+    assert env.store.get_plan(pid)["mode"] == "group"
+    r = c.post("/demo", data={"city": "Chicago"}, follow_redirects=False)
+    assert env.store.get_plan(plan_id_of(r))["mode"] == "group"
+    assert web.plan_mode({"city": "x"}) == "group"
+
+
+def test_solo_rate_limit(env):
+    c = env.browser()
+    for _ in range(20):
+        new_solo(c, ip="198.51.100.1")
+    r = c.post("/solo", data=SOLO_FORM, headers={"x-real-ip": "198.51.100.1"}, follow_redirects=False)
+    assert r.status_code == 429
+    new_solo(c, ip="198.51.100.2")
+
+
+def test_solo_rejects_cross_site_post(env):
+    r = env.browser().post("/solo", data=SOLO_FORM, headers={"sec-fetch-site": "cross-site"},
+                           follow_redirects=False)
+    assert r.status_code == 403
+    assert env.store.count_all_plans(T0 - timedelta(days=1)) == 0
+
+
+@pytest.mark.parametrize("over", [{"city": "Atlantis"}, {"city": "other", "other_city": "  "},
+                                  {"date_text": ""}])
+def test_solo_rejects_bad_city(env, over):
+    form = dict(SOLO_FORM)
+    form.update(over)
+    r = env.browser().post("/solo", data=form, follow_redirects=False)
+    assert r.status_code == 400
+    assert REQUIRED_COPY in r.text
+    assert env.store.count_all_plans(T0 - timedelta(days=1)) == 0
+
+
+def test_solo_other_city_uses_free_text(env):
+    pid = new_solo(env.browser(), city="other", other_city="Denver")
+    assert env.store.get_plan(pid)["city"] == "Denver"
+
+
+def test_solo_second_browser_cannot_add_card(env):
+    c = env.browser()
+    pid = new_solo(c)
+    card(c, pid, "Ann")
+    r = card(env.browser(), pid, "Bo", expect=409)
+    assert "full" in r.text.lower()
+    assert len(env.store.cards(pid)) == 1
+
+
+def test_solo_plan_page_goes_to_card_or_fight(env):
+    c = env.browser()
+    pid = new_solo(c)
+    r = c.get(f"/p/{pid}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/p/{pid}/card"
+    card(c, pid, "Ann")
+    r = c.get(f"/p/{pid}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/p/{pid}/card"
+    argue(c, pid)
+    r = c.get(f"/p/{pid}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/p/{pid}/argue"
+    for path in (f"/p/{pid}/card", f"/p/{pid}/argue"):
+        t = c.get(path).text
+        assert "Copy link" not in t and "share-url" not in t
+
+
+def test_solo_card_save_offers_fight(env):
+    c = env.browser()
+    pid = new_solo(c)
+    r = card(c, pid, "Ann")
+    t = c.get(r.headers["location"]).text
+    assert f'action="/p/{pid}/argue"' in t and "Start the fight" in t
+    assert "Copy link" not in t and "share-url" not in t
+    assert not re.search(r"cards? in|of 1 cards", t.lower())
+    no_group_words(t)
+    argue(c, pid)
+    assert c.get(f"/p/{pid}/card").status_code == 200
+
+
+def test_solo_card_page_before_saving_has_no_group_words(env):
+    c = env.browser()
+    pid = new_solo(c)
+    t = c.get(f"/p/{pid}/card").text
+    assert "Start the fight" not in t
+    no_group_words(t)
+
+
+def test_solo_argue_page(env):
+    pid, c = solo_ready(env)
+    result = env.store.get_result(pid)[1]
+    t = c.get(f"/p/{pid}/argue").text
+    assert "Your Saver" in t
+    assert "WINNER" in t and 'class="winner"' in t
+    assert result.top[0].candidate.title in re.search(r'<p class="winner".*?</p>', t, re.S).group(0)
+    assert t.count("Pick this one instead") == len(result.top) - 1
+    assert "/vote" not in t
+    no_group_words(t)
+    assert REQUIRED_COPY in t
+    assert f'action="/p/{pid}/cart"' in t          # the pick is final, the cart is one click away
+
+
+def test_solo_argue_page_stranger_cannot_pick_or_cart(env):
+    pid, c = solo_ready(env)
+    t = env.browser().get(f"/p/{pid}/argue").text
+    assert "Pick this one instead" not in t and "Get the cart link" not in t
+    assert "WINNER" in t
+
+
+def test_solo_budget_emptied_page_is_solo_worded(env):
+    pid, c = solo_ready(env, budget="5")
+    t = c.get(f"/p/{pid}/argue").text
+    assert 'value="budget"' in t and 'class="offer"' not in t
+    assert "No offer fits your budget" in t
+    no_group_words(t)
+    r = c.post(f"/p/{pid}/relax", data={"drop": "budget"})
+    assert r.status_code == 200 and "$20.00" in r.text
+    no_group_words(r.text)
+
+
+def test_solo_hard_no_relax_still_works():
+    env = karaoke_env()
+    c = env.browser()
+    pid = new_solo(c)
+    card(c, pid, "Ann", "50", hard_nos="karaoke")
+    argue(c, pid)
+    t = c.get(f"/p/{pid}/argue").text
+    assert 'value="hard_no:karaoke"' in t and 'class="offer"' not in t
+    no_group_words(t)
+    r = c.post(f"/p/{pid}/relax", data={"drop": "hard_no:karaoke"})
+    assert r.status_code == 200
+    no_group_words(r.text)
+    assert env.store.cards(pid)[0].hard_nos == []
+    argue(c, pid)
+    assert sorted(top_product_ids(env, pid)) == ["p1", "p2"]
+
+
+def test_solo_pages_have_no_dashes(env):
+    pid, c = solo_ready(env)
+    for path in ("/", f"/p/{pid}/card", f"/p/{pid}/argue"):
+        t = c.get(path).text
+        assert chr(0x2014) not in t and chr(0x2013) not in t, path
+
+
+def test_group_form_still_requires_two(env):
+    r = env.browser().post("/plans", data={"city": "Chicago", "date_text": "Sat", "group_size": "1",
+                                           "theme": ""}, follow_redirects=False)
+    assert r.status_code == 400
+
+
+def test_solo_tally_shape():
+    class C:
+        def __init__(self, pid):
+            self.product_id = pid
+
+    class R:
+        def __init__(self, pid):
+            self.candidate = C(pid)
+
+    class Res:
+        top = [R("a"), R("b"), R("c")]
+
+    t = web.solo_tally(Res, None, frozenset())
+    assert t["winner"] == "a" and t["reason"] == "the referee's pick" and t["final"] is True
+    assert t["counts"] == {"a": 0, "b": 0, "c": 0}
+    assert set(t) == set(web.tally(Res.top, {}, None))
+    t = web.solo_tally(Res, "b", frozenset())
+    assert t["winner"] == "b" and t["reason"] == "your pick"
+    assert web.solo_tally(Res, "zzz", frozenset())["winner"] == "a"
+    assert web.solo_tally(Res, "a", frozenset({"a"}))["winner"] == "b"
+    assert web.solo_tally(Res, None, frozenset({"a", "b", "c"}))["winner"] is None
+
+
+def test_home_has_one_player_form_with_unique_ids(env):
+    t = env.browser().get("/").text
+    assert 'action="/solo"' in t and "1 PLAYER" in t
+    ids = re.findall(r'\sid="([^"]+)"', t)
+    assert len(ids) == len(set(ids)), ids
+    for prefix in ("solo-", "group-", "demo-"):
+        assert any(i.startswith(prefix + "city") for i in ids), prefix

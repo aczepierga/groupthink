@@ -325,6 +325,26 @@ def _plan_form_values(src) -> dict:
             "theme": src.get("theme", "")}
 
 
+def plan_mode(plan: dict) -> str:
+    """"solo" for a 1-person plan, "group" for everything else (including plans stored before modes existed)."""
+    return plan.get("mode", "group")
+
+
+def _city_and_date(form: dict):
+    """(city, date_text, None) for a valid plan form, else (None, None, the message to show)."""
+    city = form.get("city", "")
+    if city == "other":
+        city = form.get("other_city", "").strip()[:CITY_MAX]
+        if not city:
+            return None, None, "Type the city name."
+    elif city not in CITIES:
+        return None, None, "Pick a city from the list."
+    date_text = form.get("date_text", "").strip()[:DATE_MAX]
+    if not date_text:
+        return None, None, "Say when you are planning to go, in your own words."
+    return city, date_text, None
+
+
 @router.get("/")
 def home(request: Request):
     values = _plan_form_values({})
@@ -362,16 +382,9 @@ def create_plan(request: Request, form: dict = Depends(read_form), deps: Deps = 
     def bad(message):
         return render(request, "new_plan.html", 400, cities=CITIES, values=values, error=message)
 
-    city = form.get("city", "")
-    if city == "other":
-        city = form.get("other_city", "").strip()[:CITY_MAX]
-        if not city:
-            return bad("Type the city name.")
-    elif city not in CITIES:
-        return bad("Pick a city from the list.")
-    date_text = form.get("date_text", "").strip()[:DATE_MAX]
-    if not date_text:
-        return bad("Say when you are planning to go, in your own words.")
+    city, date_text, problem = _city_and_date(form)
+    if problem:
+        return bad(problem)
     try:
         size = int(form.get("group_size", ""))
     except ValueError:
@@ -382,8 +395,27 @@ def create_plan(request: Request, form: dict = Depends(read_form), deps: Deps = 
     plan_id = deps.store.create_plan({
         "city": city, "date_text": date_text, "group_size": size,
         "theme": form.get("theme", "").strip()[:THEME_MAX], "host_token_hash": _sha(token),
-        "ip_hash": ip_hash, "created_at": now.isoformat(), "demo": False})
+        "ip_hash": ip_hash, "created_at": now.isoformat(), "demo": False, "mode": "group"})
     response = RedirectResponse("/p/" + plan_id, status_code=303)
+    set_cookie(response, "host_" + plan_id, token)
+    return response
+
+
+@router.post("/solo")
+def create_solo(request: Request, form: dict = Depends(read_form), deps: Deps = Depends(get_deps)):
+    """A 1-person plan: one seat, no share link. Same CSRF check, rate limits and TTL as /plans."""
+    ip_hash, now, refused = _admit(request, deps)
+    if refused is not None:
+        return refused
+    city, date_text, problem = _city_and_date(form)
+    if problem:
+        return render(request, "new_plan.html", 400, cities=CITIES, values=_plan_form_values(form), error=problem)
+    token = secrets.token_urlsafe(24)
+    plan_id = deps.store.create_plan({
+        "city": city, "date_text": date_text, "group_size": 1,
+        "theme": form.get("theme", "").strip()[:THEME_MAX], "host_token_hash": _sha(token),
+        "ip_hash": ip_hash, "created_at": now.isoformat(), "demo": False, "mode": "solo"})
+    response = RedirectResponse("/p/%s/card" % plan_id, status_code=303)
     set_cookie(response, "host_" + plan_id, token)
     return response
 
@@ -402,7 +434,7 @@ def create_demo(request: Request, form: dict = Depends(read_form), deps: Deps = 
     plan_id = deps.store.create_plan({
         "city": city, "date_text": demo_data.DATE_TEXT, "group_size": demo_data.GROUP_SIZE,
         "theme": demo_data.THEME, "host_token_hash": _sha(token), "ip_hash": ip_hash,
-        "created_at": now.isoformat(), "demo": True})
+        "created_at": now.isoformat(), "demo": True, "mode": "group"})
     people = [(member_id, demo_data.YOU)] + [(secrets.token_urlsafe(12), s) for s in demo_data.SAMPLES]
     for mid, p in people:
         deps.store.put_card(plan_id, Member.clean(
@@ -417,6 +449,10 @@ def create_demo(request: Request, form: dict = Depends(read_form), deps: Deps = 
 @router.get("/p/{plan_id}")
 def plan_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     plan = load_plan(deps, plan_id)
+    if plan_mode(plan) == "solo":
+        # nothing to share and no roster: the card, or the picks once the first fight has run
+        done = deps.store.get_result(plan_id) is not None
+        return RedirectResponse("/p/%s/%s" % (plan_id, "argue" if done else "card"), status_code=303)
     cards = deps.store.cards(plan_id)
     me = current_member(request, plan_id, cards)
     runs = deps.store.argue_count(plan_id)
@@ -456,7 +492,9 @@ def _card_page(request, deps, plan_id, plan, cards, status=200, values=None, err
     return render(request, "card.html", status if not full else 409, plan_id=plan_id, plan=plan, me=me,
                   full=full, values=values or _card_values(me), error=error,
                   saved=request.query_params.get("saved") == "1",
-                  relax_word=_relax_offer(deps.store, plan_id, me))
+                  relax_word=_relax_offer(deps.store, plan_id, me), solo=plan_mode(plan) == "solo",
+                  host=is_host(request, plan_id, plan), runs=deps.store.argue_count(plan_id),
+                  max_runs=MAX_RUNS)
 
 
 @router.get("/p/{plan_id}/card")
@@ -523,7 +561,7 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     try:
         result = rank(found.candidates, members)
         result.adult_dropped = found.adult_dropped
-        lines = run_debate(result, members, _seed(plan_id, run - 1), deps.now().date())
+        lines = run_debate(result, members, _seed(plan_id, run - 1), deps.now().date(), mode=plan_mode(plan))
         store.save_result(plan_id, lines, result)
     except Exception:
         store.release_run(plan_id)
@@ -551,6 +589,21 @@ def tally(top: list[Ranked], votes: dict, pick: str | None, voters: int = 0) -> 
     final = winner is not None and (reason == "the host broke the tie" or sum(counts.values()) >= voters)
     return {"counts": counts, "best": best, "leaders": leaders, "winner": winner, "reason": reason,
             "final": final, "pickable": len(leaders) > 1 or best == 0}
+
+
+def solo_tally(result: RankResult, pick: str | None, blocked) -> dict:
+    """The `tally` shape for a 1-person plan: nobody votes, so the winner is the person's own pick when it is
+    one of the top options and not blocked, else the first unblocked top option (the referee's)."""
+    ids = [r.candidate.product_id for r in result.top]
+    open_ids = [pid for pid in ids if pid not in blocked]
+    if pick in open_ids:
+        winner, reason = pick, "your pick"
+    elif open_ids:
+        winner, reason = open_ids[0], "the referee's pick"
+    else:
+        winner = reason = None
+    return {"counts": {pid: 0 for pid in ids}, "best": 0, "leaders": [winner] if winner else [],
+            "winner": winner, "reason": reason, "final": True, "pickable": False}
 
 
 def _date_text(value) -> str | None:
@@ -620,13 +673,16 @@ def safe_deal_url(c: Candidate) -> str | None:
     return url
 
 
-def _offer_view(r: Ranked, counts: dict) -> dict:
+def _offer_view(r: Ranked, counts: dict, solo: bool = False) -> dict:
     c = r.candidate
     group = max(len(r.verdicts), 1)
     spend = per_member_spend_minor(c, r.quantity, group)
-    why = ["Within every budget: about %s per person." % fmt(spend, c.precision)]
+    why = ["Within your budget: about %s." % fmt(spend, c.precision) if solo
+           else "Within every budget: about %s per person." % fmt(spend, c.precision)]
     liked = sum(1 for v in r.verdicts if v.likes_matched)
-    if liked:
+    if liked and solo:
+        why.append("Matches something you like.")
+    elif liked:
         why.append("Matches something %d of %d members like." % (liked, len(r.verdicts)))
     if r.discount_pct:
         why.append("%d%% off the original price." % r.discount_pct)
@@ -696,9 +752,13 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         return RedirectResponse("/p/" + plan_id, status_code=303)
     lines, result = got
     cards = deps.store.cards(plan_id)
-    tal = tally(result.top, deps.store.votes(plan_id), deps.store.get_pick(plan_id),
-                 sum(1 for m in cards if not m.sample))
-    offers = [_offer_view(r, tal["counts"]) for r in result.top]
+    solo = plan_mode(plan) == "solo"
+    if solo:
+        tal = solo_tally(result, deps.store.get_pick(plan_id), frozenset())
+    else:
+        tal = tally(result.top, deps.store.votes(plan_id), deps.store.get_pick(plan_id),
+                    sum(1 for m in cards if not m.sample))
+    offers = [_offer_view(r, tal["counts"], solo) for r in result.top]
     winner = next((o for o in offers if o["product_id"] == tal["winner"]), None)
     host = is_host(request, plan_id, plan)
     me = current_member(request, plan_id, cards)
@@ -710,7 +770,8 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         offers=offers, empty=empty, owns_hard_no=owns_hard_no, thin=_thin_view(result, plan["city"]),
         winner=winner, final=tal["final"], reason=tal["reason"], leaders=tal["leaders"], host=host,
         can_pick=host and tal["pickable"] and tal["best"] > 0 and len(tal["leaders"]) > 1,
-        can_vote=me is not None, can_cart=bool(winner and tal["final"] and (host or me is not None)),
+        can_vote=me is not None and not solo, solo=solo, can_switch=solo and host and winner is not None,
+        can_cart=bool(winner and tal["final"] and (host or me is not None)),
         runs=deps.store.argue_count(plan_id), max_runs=MAX_RUNS)
 
 
@@ -720,6 +781,7 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
 def relax(plan_id: str, request: Request, form: dict = Depends(read_form), deps: Deps = Depends(get_deps)):
     plan = load_plan(deps, plan_id)
     store = deps.store
+    solo = plan_mode(plan) == "solo"
     drop = form.get("drop", "")
     runs_left = MAX_RUNS - store.argue_count(plan_id)
     if drop == "budget":
@@ -729,7 +791,7 @@ def relax(plan_id: str, request: Request, form: dict = Depends(read_form), deps:
         if cheapest is None:
             raise refuse(400, "There is no argument to relax yet.", "Nothing to relax")
         return render(request, "relax.html", 200, plan_id=plan_id, kind="budget", cheapest=cheapest,
-                      runs_left=runs_left, host=True)
+                      runs_left=runs_left, host=True, solo=solo)
     if drop.startswith("hard_no:") and drop[8:].strip():
         word = drop[8:]
         cards = store.cards(plan_id)
@@ -740,7 +802,7 @@ def relax(plan_id: str, request: Request, form: dict = Depends(read_form), deps:
         me.hard_nos = [h for h in me.hard_nos if h.strip().casefold() != word.strip().casefold()]
         store.put_card(plan_id, me)
         return render(request, "relax.html", 200, plan_id=plan_id, kind="hard_no", word=word.strip(),
-                      runs_left=runs_left, host=is_host(request, plan_id, plan))
+                      runs_left=runs_left, host=is_host(request, plan_id, plan), solo=solo)
     raise refuse(400, "Nothing to relax there. Pick one of the options on the results page.", "Bad request")
 
 
@@ -767,6 +829,11 @@ def pick(plan_id: str, request: Request, form: dict = Depends(read_form), deps: 
     got = store.get_result(plan_id)
     if got is None:
         raise refuse(400, "There is nothing to pick yet.", "Bad request")
+    if plan_mode(plan) == "solo":
+        if form.get("product_id") not in {r.candidate.product_id for r in got[1].top}:
+            raise refuse(400, "That is not one of your options.", "Bad request")
+        store.set_pick(plan_id, form["product_id"])
+        return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
     tal = tally(got[1].top, store.votes(plan_id), None)
     if not tal["pickable"] or form.get("product_id") not in tal["leaders"]:
         raise refuse(400, "The host only breaks ties, and only between the tied options.", "Bad request")
@@ -793,9 +860,17 @@ def _cart_context(request, deps, plan_id):
                           "they joined with.")
     got = store.get_result(plan_id)
     tal = win = None
+    solo = plan_mode(plan) == "solo"
     if got is not None:
-        tal = tally(got[1].top, store.votes(plan_id), store.get_pick(plan_id), sum(1 for m in cards if not m.sample))
+        if solo:
+            tal = solo_tally(got[1], store.get_pick(plan_id), frozenset())
+        else:
+            tal = tally(got[1].top, store.votes(plan_id), store.get_pick(plan_id),
+                        sum(1 for m in cards if not m.sample))
         win = next((r for r in got[1].top if r.candidate.product_id == tal["winner"]), None)
+    if win is None and solo:
+        raise refuse(409, "There is no pick to put in a cart yet. Start the fight from your card first.",
+                     "Not yet")
     if win is None or not tal["final"]:
         raise refuse(409, "The group has not agreed on one option yet. Finish the vote, then come back for the "
                           "cart link.", "Not yet")
@@ -820,6 +895,7 @@ def _render_cart(request, plan_id, plan, result, tal, win, view):
         total=fmt(view.total_minor, view.precision),
         new_price=fmt(view.new_price_minor, view.precision) if view.new_price_minor is not None else None,
         runner_up=_runner_up(result, tal, win) if view.unavailable else None,
+        solo=plan_mode(plan) == "solo",
         can_create=bool(view.missing) and not view.unavailable and view.new_price_minor is None)
 
 
@@ -859,7 +935,8 @@ def cart_create(plan_id: str, request: Request, form: dict = Depends(read_form),
     plan, result, tal, win = _cart_context(request, deps, plan_id)
     named = form.get("product_id", "")
     if named and named != win.candidate.product_id:
-        raise refuse(403, "Only the option the group picked can be put in a cart.")
+        raise refuse(403, "Only the option you picked can be put in a cart." if plan_mode(plan) == "solo"
+                     else "Only the option the group picked can be put in a cart.")
     posted = None
     raw = form.get("expected_minor", "").strip()
     if raw:

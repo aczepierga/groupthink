@@ -5,22 +5,45 @@
 <p>Everyone in your group gets a bot that argues for them over live LivingSocial offers until the group agrees on one offer and one cart link.</p>
 {% include "_copy.html" %}
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+<section aria-labelledby="solo-h">
+  <h2 id="solo-h">1 PLAYER</h2>
+  <p class="muted">Going alone? Two voices in your own head, your Saver and your Fun side, argue over live offers until one wins and you get one cart link.</p>
+  <form method="post" action="/solo" class="stack">
+    <label for="solo-city">City</label>
+    <select id="solo-city" name="city">
+      {% for c in cities %}<option value="{{ c }}"{% if values.city == c %} selected{% endif %}>{{ c }}</option>
+      {% endfor %}<option value="other"{% if values.city == "other" %} selected{% endif %}>Other US city</option>
+    </select>
+    <label for="solo-other_city">Other city (only if you picked "Other US city")</label>
+    <input id="solo-other_city" name="other_city" type="text" maxlength="60" value="{{ values.other_city }}" autocomplete="off">
+    <label for="solo-date_text">When</label>
+    <input id="solo-date_text" name="date_text" type="text" maxlength="60" required placeholder="Sat Nov 8, evening" value="{{ values.date_text }}">
+    <label for="solo-theme">Theme or vibe (optional)</label>
+    <input id="solo-theme" name="theme" type="text" maxlength="80" placeholder="date night, pottery, tacos" value="{{ values.theme }}">
+    <button type="submit">Start solo</button>
+  </form>
+</section>
+
+<section aria-labelledby="group-h">
+  <h2 id="group-h">2 TO 6 PLAYERS</h2>
 <form method="post" action="/plans" class="stack">
-  <label for="city">City</label>
-  <select id="city" name="city">
+  <label for="group-city">City</label>
+  <select id="group-city" name="city">
     {% for c in cities %}<option value="{{ c }}"{% if values.city == c %} selected{% endif %}>{{ c }}</option>
     {% endfor %}<option value="other"{% if values.city == "other" %} selected{% endif %}>Other US city</option>
   </select>
-  <label for="other_city">Other city (only if you picked "Other US city")</label>
-  <input id="other_city" name="other_city" type="text" maxlength="60" value="{{ values.other_city }}" autocomplete="off">
-  <label for="date_text">When</label>
-  <input id="date_text" name="date_text" type="text" maxlength="60" required placeholder="Sat Nov 8, evening" value="{{ values.date_text }}">
-  <label for="group_size">How many people (2 to 6)</label>
-  <input id="group_size" name="group_size" type="number" inputmode="numeric" min="2" max="6" required value="{{ values.group_size }}">
-  <label for="theme">Theme or vibe (optional)</label>
-  <input id="theme" name="theme" type="text" maxlength="80" placeholder="date night, pottery, tacos" value="{{ values.theme }}">
+  <label for="group-other_city">Other city (only if you picked "Other US city")</label>
+  <input id="group-other_city" name="other_city" type="text" maxlength="60" value="{{ values.other_city }}" autocomplete="off">
+  <label for="group-date_text">When</label>
+  <input id="group-date_text" name="date_text" type="text" maxlength="60" required placeholder="Sat Nov 8, evening" value="{{ values.date_text }}">
+  <label for="group-group_size">How many people (2 to 6)</label>
+  <input id="group-group_size" name="group_size" type="number" inputmode="numeric" min="2" max="6" required value="{{ values.group_size }}">
+  <label for="group-theme">Theme or vibe (optional)</label>
+  <input id="group-theme" name="theme" type="text" maxlength="80" placeholder="date night, pottery, tacos" value="{{ values.theme }}">
   <button type="submit">Start a plan</button>
 </form>
+</section>
 
 <section aria-labelledby="demo-h">
   <h2 id="demo-h">Just looking?</h2>

@@ -2,12 +2,16 @@
 {% block title %}GroupThink: your card{% endblock %}
 {% block content %}
 <h1>Your card</h1>
-<p><a href="/p/{{ plan_id }}">Back to the plan</a></p>
+{% if not solo %}<p><a href="/p/{{ plan_id }}">Back to the plan</a></p>
+{% elif runs > 0 %}<p><a href="/p/{{ plan_id }}/argue">Back to the picks</a></p>{% endif %}
 {% if full %}
-  <p class="error" role="alert">This plan already has all {{ plan.group_size }} cards, so it is full.</p>
+  {% if solo %}<p class="error" role="alert">This plan already has its one card, so it is full.</p>
+  {% else %}<p class="error" role="alert">This plan already has all {{ plan.group_size }} cards, so it is full.</p>{% endif %}
 {% else %}
-  <p>Private: only you see this card. Your bot argues in general terms ("over my budget") unless you tick "say my numbers".</p>
-  {% if saved %}<p class="notice" role="status">Saved. You can edit your card until the host reruns the argument.</p>{% endif %}
+  {% if solo %}<p>Private: only you see this card. Your two voices argue in general terms ("over my budget") unless you tick "say my numbers".</p>
+  {% else %}<p>Private: only you see this card. Your bot argues in general terms ("over my budget") unless you tick "say my numbers".</p>{% endif %}
+  {% if saved %}{% if solo %}<p class="notice" role="status">Saved. You can edit your card and start the fight again.</p>
+  {% else %}<p class="notice" role="status">Saved. You can edit your card until the host reruns the argument.</p>{% endif %}{% endif %}
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   {% if relax_word %}
   <form method="post" action="/p/{{ plan_id }}/relax" class="stack callout">
@@ -15,6 +19,19 @@
     <input type="hidden" name="drop" value="hard_no:{{ relax_word }}">
     <button type="submit" class="secondary">Drop this hard no</button>
   </form>
+  {% endif %}
+  {% if solo and me and host %}
+  <section aria-labelledby="fight-h">
+    <h2 id="fight-h">Start the fight</h2>
+    {% if runs >= max_runs %}
+    <p>Your two voices have argued {{ max_runs }} times, which is the limit for one plan.</p>
+    {% else %}
+    <form method="post" action="/p/{{ plan_id }}/argue">
+      <button type="submit">Start the fight</button>
+    </form>
+    <p class="muted">Fight {{ runs + 1 }} of {{ max_runs }}. The search takes a few seconds. It uses the card as saved below.</p>
+    {% endif %}
+  </section>
   {% endif %}
   <form method="post" action="/p/{{ plan_id }}/card" class="stack">
     <label for="name">Your name</label>

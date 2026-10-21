@@ -15,9 +15,11 @@
     <p><strong>{{ view.message }}</strong></p>
     <p>Groupon says this offer can no longer be bought, so there is no cart link and nothing was added.</p>
     {% if runner_up %}
-    <p>Runner-up: {{ runner_up.title }} ({{ runner_up.price }} per voucher). To switch, ask the group to vote for it on the <a href="/p/{{ plan_id }}/argue">picks page</a>.</p>
+    {% if solo %}<p>Runner-up: {{ runner_up.title }} ({{ runner_up.price }} per voucher). To switch, pick it on the <a href="/p/{{ plan_id }}/argue">picks page</a>.</p>
+    {% else %}<p>Runner-up: {{ runner_up.title }} ({{ runner_up.price }} per voucher). To switch, ask the group to vote for it on the <a href="/p/{{ plan_id }}/argue">picks page</a>.</p>{% endif %}
     {% else %}
-    <p>No other option is on the table. The host can run the argument again from the <a href="/p/{{ plan_id }}">plan page</a>.</p>
+    {% if solo %}<p>No other option is on the table. You can start the fight again from <a href="/p/{{ plan_id }}/card">your card page</a>.</p>
+    {% else %}<p>No other option is on the table. The host can run the argument again from the <a href="/p/{{ plan_id }}">plan page</a>.</p>{% endif %}
     {% endif %}
   </div>
 
@@ -40,7 +42,7 @@
   {% elif view.links %}
   <p class="price">Buy {{ view.quantity }} voucher{{ '' if view.quantity == 1 else 's' }} at <span class="now">{{ unit }}</span> each. Total {{ total }}, before tax and promo codes.</p>
   {% if view.message %}<p>{{ view.message }}</p>{% endif %}
-  <p>One person pays on Groupon checkout.</p>
+  <p>{% if solo %}You pay on Groupon checkout.{% else %}One person pays on Groupon checkout.{% endif %}</p>
   {% if view.links|length > 1 %}
   <ol class="checkouts">
     {% for link in view.links %}<li><a class="button" href="{{ link }}" target="_blank" rel="noopener noreferrer">Checkout {{ loop.index }} of {{ view.links|length }}</a></li>
