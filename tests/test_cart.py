@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 import pytest
 
 from groupthink import config
+from groupthink import web
+from groupthink.cart import make_carts
 from groupthink.ls_client import LsClient
 from test_web import KEY, REQUIRED_COPY, T0, Env, FakeLs, argue, card, group, new_solo, p_hit
 
@@ -247,9 +249,12 @@ def test_not_cartable_offers_runner_up(how):
         api.line_unavailable = True
     r = get_cart_link(host, pid)
     assert r.status_code == 200
-    assert "No longer available" in r.text
     assert checkout_hrefs(r.text) == [] and BUY_HOST not in r.text
-    assert runner_up in r.text and "Runner-up" in r.text
+    if how == "not_cartable":                         # LivingSocial cannot cart it: we move to the next option
+        assert "could not go in a cart" in r.text and runner_up in r.text
+    else:
+        assert "No longer available" in r.text
+        assert runner_up in r.text and "Runner-up" in r.text
 
 
 # ---- idempotence ---------------------------------------------------------------------------------
@@ -831,7 +836,10 @@ def test_solo_unavailable_runner_up_has_no_group_words(how):
     else:
         api.line_unavailable = True
     r = get_cart_link(c, pid)
-    assert "No longer available" in r.text and "Runner-up" in r.text and "choose it" in r.text
+    if how == "not_cartable":
+        assert "could not go in a cart" in r.text and "Your first pick" in r.text
+    else:
+        assert "No longer available" in r.text and "Runner-up" in r.text and "choose it" in r.text
     assert not solo_words(r.text)
 
 
@@ -865,3 +873,133 @@ def test_plain_message_group_unchanged_and_solo_variant():
                     "takes 2 separate checkouts. You pay on each.")
     assert not solo_words(solo)
     assert _plain_message(ranked, 1, solo=True) is None
+
+
+# ---- offers LivingSocial cannot cart ---------------------------------------------------------------
+
+NOT_CARTABLE = (400, {"code": "failedPrecondition", "message": "nope", "details": {"error": "PRODUCT_NOT_CARTABLE"}})
+
+
+@pytest.mark.parametrize("how", ["not_cartable", "invalid_product", "sold_out"])
+def test_only_product_not_cartable_sets_flag(how):
+    env, api = make_env()
+    pid, host, _, ranked = final_group(env, api)
+    if how == "not_cartable":
+        api.fail_create = NOT_CARTABLE
+    elif how == "invalid_product":
+        api.fail_create = (404, {"code": "notFound", "message": "nope", "details": {"error": "INVALID_PRODUCT_ID"}})
+    else:
+        api.line_unavailable = True
+    view = make_carts(env.ls, env.store, ranked, pid, now=T0)
+    assert view.unavailable is True                    # today's behaviour for all three
+    assert view.not_cartable is (how == "not_cartable")
+
+
+def test_group_cart_moves_to_next_option():
+    env, api = make_env()
+    pid, host, _, ranked = final_group(env, api)
+    top = env.store.get_result(pid)[1].top
+    a, b = top[0].candidate, top[1].candidate
+    api.fail_create = NOT_CARTABLE
+    r = get_cart_link(host, pid)
+    assert r.status_code == 200
+    assert a.product_id in env.store.not_cartable_ids(env.clock[0])
+    assert "first pick" in r.text and "could not go in a cart" in r.text and a.title in r.text
+    assert b.title in r.text and checkout_hrefs(r.text) == []
+    assert 'name="product_id" value="%s"' % b.product_id in r.text      # B's cart button
+    api.fail_create, api.price = None, b.price_minor            # the fake API has one live price
+    r = get_cart_link(host, pid)
+    assert len(checkout_hrefs(r.text)) == 1
+    assert api.posts[-1]["items"][0]["productId"] == b.product_id
+    assert env.store.carts_for(pid, a.option_id) == []
+
+
+def test_solo_cart_moves_to_next_option():
+    env, api = make_env()
+    pid, c, ids = solo_run(env)
+    api.fail_create = NOT_CARTABLE
+    r = get_cart_link(c, pid)
+    assert r.status_code == 200
+    assert ids[0] in env.store.not_cartable_ids(env.clock[0])
+    assert "Your first pick" in r.text and "could not go in a cart" in r.text
+    assert not solo_words(r.text)
+    api.fail_create, api.price = None, env.store.get_result(pid)[1].top[1].candidate.price_minor
+    r = get_cart_link(c, pid)
+    assert len(checkout_hrefs(r.text)) == 1
+    assert api.posts[-1]["items"][0]["productId"] == ids[1]
+    assert not solo_words(r.text)
+
+
+def test_blocked_only_voted_option_falls_to_top_scored():
+    env, api = make_env()
+    pid, host, members = group(env)
+    argue(host, pid)
+    top = env.store.get_result(pid)[1].top
+    for b in (host, members[0]):                       # 2 of 3 voted, all for A
+        b.post(f"/p/{pid}/vote", data={"product_id": top[0].candidate.product_id})
+    env.store.mark_not_cartable(top[0].candidate.product_id, env.clock[0])
+    r = host.get(f"/p/{pid}/cart")
+    assert r.status_code == 200
+    assert top[1].candidate.title in r.text
+    api.price = top[1].candidate.price_minor
+    r = get_cart_link(host, pid)
+    assert r.status_code == 200 and len(checkout_hrefs(r.text)) == 1
+    assert api.posts[-1]["items"][0]["productId"] == top[1].candidate.product_id
+
+
+@pytest.mark.parametrize("solo", [False, True])
+def test_all_top_blocked(solo):
+    env, api = make_env()
+    if solo:
+        pid, c, ids = solo_run(env)
+    else:
+        pid, c, _, _ = final_group(env, api)
+        ids = [r.candidate.product_id for r in env.store.get_result(pid)[1].top]
+    for i in ids:
+        env.store.mark_not_cartable(i, env.clock[0])
+    for r in (c.get(f"/p/{pid}/cart"), get_cart_link(c, pid)):
+        assert r.status_code == 200
+        t = r.text.lower()
+        assert "none of these can go in a cart" in t and "run the search again" in t
+        assert "<form" not in t and checkout_hrefs(r.text) == []
+        assert chr(0x2014) not in t and chr(0x2013) not in t
+        if solo:
+            assert not solo_words(r.text)
+    assert api.posts == []
+
+
+def test_argue_passes_skip_ids(monkeypatch):
+    env, api = make_env()
+    pid, host, _ = group(env)
+    env.store.mark_not_cartable("p2", env.clock[0])
+    seen = []
+    real = web.scout
+
+    def spy(*a, **kw):
+        seen.append(kw.get("skip_ids"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(web, "scout", spy)
+    argue(host, pid)
+    assert seen == [{"p2"}]
+    assert all(r.candidate.product_id != "p2" for r in env.store.get_result(pid)[1].shortlist)
+
+
+def test_tally_skips_blocked_winner():
+    from types import SimpleNamespace as NS
+    top = [NS(candidate=NS(product_id=p, title="T" + p, price_minor=1000, precision=2)) for p in "ABC"]
+    votes = {"A": 2, "B": 1}
+    plain = web.tally(top, votes, None, 3)
+    assert plain["winner"] == "A" and plain["final"] is True
+    t = web.tally(top, votes, None, 3, {"A"})
+    assert t["winner"] == "B" and t["final"] is plain["final"] and "A" not in t["counts"]
+    only = web.tally(top, {"A": 2}, None, 3, {"A"})                  # the only votes went to a blocked option
+    assert only["winner"] == "B" and only["final"] is True and only["pickable"] is False
+    nothing = web.tally(top, {}, None, 3, {"A"})
+    assert nothing["winner"] is None and nothing["final"] is False
+    assert web.tally(top, votes, None, 3, {"A", "B", "C"})["winner"] is None
+    result = NS(top=top)
+    for blocked in (set(), {"B"}, {"B", "C"}):
+        ru = web._runner_up(result, t, top[0], blocked)
+        assert ru is None or ru["title"] not in {"T" + b for b in blocked}
+    assert web._runner_up(result, t, top[0], {"B", "C"}) is None

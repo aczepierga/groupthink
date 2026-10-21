@@ -40,6 +40,7 @@ class CartView:
     precision: int = 2
     new_price_minor: int | None = None     # set when the live price differs from what the group saw
     unavailable: bool = False
+    not_cartable: bool = False             # PRODUCT_NOT_CARTABLE only: slot-booked or third-party inventory
     missing: int = 0                       # checkouts that have no usable cart yet
     error: str | None = None               # a plain-English problem that is neither price nor availability
 
@@ -143,8 +144,8 @@ def make_carts(client, store, ranked: Ranked, plan_id: str, expected_price_minor
     def price_changed(new):
         return view(message="Price changed to %s" % fmt(new, c.precision), new_price_minor=new, missing=n_needed)
 
-    def gone():
-        return view(message="No longer available", unavailable=True, missing=n_needed)
+    def gone(not_cartable=False):
+        return view(message="No longer available", unavailable=True, missing=n_needed, not_cartable=not_cartable)
 
     if chunks is None:
         return view(message=None, error="This offer cannot be split into checkouts that meet its minimum of "
@@ -201,7 +202,7 @@ def make_carts(client, store, ranked: Ranked, plan_id: str, expected_price_minor
                     if exc.error == "PRICE_MISMATCH" and exc.current_price_minor is not None:
                         return price_changed(exc.current_price_minor)
                     if exc.error in UNAVAILABLE_ERRORS:
-                        return gone()
+                        return gone(not_cartable=exc.error == "PRODUCT_NOT_CARTABLE")
                     raise
                 made_count += 1
                 cart_id = made["id"]

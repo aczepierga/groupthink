@@ -102,10 +102,11 @@ def _sellable(hit: dict) -> bool:
 
 
 def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, path: str,
-          budget_s: float = BUDGET_S, clock=time.monotonic) -> ScoutResult:
+          budget_s: float = BUDGET_S, clock=time.monotonic, skip_ids: set[str] = frozenset()) -> ScoutResult:
     """Fetch and build candidates inside a wall-clock budget (default 12 s, i.e. 8 s for the last agent
     read to start and 10 s for the last query). Past a cutoff nothing new starts and what was gathered is
-    returned: later offers simply stay Partner-only, and fewer queries just mean fewer products."""
+    returned: later offers simply stay Partner-only, and fewer queries just mean fewer products.
+    Products in `skip_ids` (LivingSocial said they cannot be carted) are left out before anything else."""
     if path not in ("A", "B"):
         raise ValueError("path must be 'A' or 'B'")
     start = clock()
@@ -134,8 +135,9 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
         if len(unique) >= MAX_PRODUCTS:
             break
 
-    kept = [h for h in unique.values() if not is_adult(h)]
-    adult_dropped = len(unique) - len(kept)
+    pool = [h for h in unique.values() if h["id"] not in skip_ids]
+    kept = [h for h in pool if not is_adult(h)]
+    adult_dropped = len(pool) - len(kept)
 
     agent_details: dict[str, dict] = {}
     if path == "A" and any(_sellable(h) for h in kept):

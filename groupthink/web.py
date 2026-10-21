@@ -545,13 +545,14 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     members = store.cards(plan_id)
     if not members:
         raise refuse(400, "Fill in at least one card first, then start the argument.", "No cards yet")
+    skip = store.not_cartable_ids(deps.now())
     # Claim the run BEFORE the slow scout: a double click or a replayed POST cannot spend a third run.
     run = store.claim_run(plan_id, MAX_RUNS)
     if run is None:
         return render(request, "limit.html", 429, kind="runs")
     try:
         found = scout(deps.ls, plan["city"], plan.get("theme", ""), max(m.max_budget_minor for m in members),
-                      len(members), SCOUT_PATH)
+                      len(members), SCOUT_PATH, skip_ids=skip)
     except Exception as exc:   # LsApiError, a missing key, a network failure: say none of it
         store.release_run(plan_id)
         log.warning("scout failed: %s status=%s", type(exc).__name__, getattr(exc, "status", None))
@@ -569,13 +570,20 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
 
 
-def tally(top: list[Ranked], votes: dict, pick: str | None, voters: int = 0) -> dict:
+def tally(top: list[Ranked], votes: dict, pick: str | None, voters: int = 0,
+          blocked: set[str] = frozenset()) -> dict:
     """Vote counts over the current top options. Ties: the host's pick, else the highest score (top order).
 
     `final` is False while some of the `voters` have not voted yet and the host has not broken a tie:
     the page then says "Leading so far" instead of announcing a pick.
+
+    `blocked` ids (LivingSocial cannot cart them) are dropped before counting, so they never win. Blocking
+    does not change `final`: every vote cast still counts toward it. When the only votes went to blocked
+    options, the group already agreed and LivingSocial removed their pick, so the top-scored open option
+    wins and `final` is True.
     """
-    ids = [r.candidate.product_id for r in top]
+    ids = [r.candidate.product_id for r in top if r.candidate.product_id not in blocked]
+    cast = sum(int(votes.get(r.candidate.product_id, 0)) for r in top)
     counts = {pid: int(votes.get(pid, 0)) for pid in ids}
     best = max(counts.values(), default=0)
     leaders = [pid for pid in ids if counts[pid] == best]
@@ -586,7 +594,11 @@ def tally(top: list[Ranked], votes: dict, pick: str | None, voters: int = 0) -> 
         winner, reason = pick, "the host broke the tie"
     elif best > 0:
         winner, reason = leaders[0], "tied on votes, highest score wins"
-    final = winner is not None and (reason == "the host broke the tie" or sum(counts.values()) >= voters)
+    elif ids and cast > 0:
+        winner, reason, leaders = ids[0], "their pick could not go in a cart, next best option", [ids[0]]
+        return {"counts": counts, "best": best, "leaders": leaders, "winner": winner, "reason": reason,
+                "final": True, "pickable": False}
+    final = winner is not None and (reason == "the host broke the tie" or cast >= voters)
     return {"counts": counts, "best": best, "leaders": leaders, "winner": winner, "reason": reason,
             "final": final, "pickable": len(leaders) > 1 or best == 0}
 
@@ -753,11 +765,12 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     lines, result = got
     cards = deps.store.cards(plan_id)
     solo = plan_mode(plan) == "solo"
+    blocked = deps.store.not_cartable_ids(deps.now())
     if solo:
-        tal = solo_tally(result, deps.store.get_pick(plan_id), frozenset())
+        tal = solo_tally(result, deps.store.get_pick(plan_id), blocked)
     else:
         tal = tally(result.top, deps.store.votes(plan_id), deps.store.get_pick(plan_id),
-                    sum(1 for m in cards if not m.sample))
+                    sum(1 for m in cards if not m.sample), blocked)
     offers = [_offer_view(r, tal["counts"], solo) for r in result.top]
     winner = next((o for o in offers if o["product_id"] == tal["winner"]), None)
     host = is_host(request, plan_id, plan)
@@ -834,7 +847,7 @@ def pick(plan_id: str, request: Request, form: dict = Depends(read_form), deps: 
             raise refuse(400, "That is not one of your options.", "Bad request")
         store.set_pick(plan_id, form["product_id"])
         return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
-    tal = tally(got[1].top, store.votes(plan_id), None)
+    tal = tally(got[1].top, store.votes(plan_id), None, blocked=store.not_cartable_ids(deps.now()))
     if not tal["pickable"] or form.get("product_id") not in tal["leaders"]:
         raise refuse(400, "The host only breaks ties, and only between the tied options.", "Bad request")
     store.set_pick(plan_id, form["product_id"])
@@ -862,11 +875,14 @@ def _cart_context(request, deps, plan_id):
     tal = win = None
     solo = plan_mode(plan) == "solo"
     if got is not None:
+        blocked = store.not_cartable_ids(deps.now())
+        if got[1].top and all(r.candidate.product_id in blocked for r in got[1].top):
+            raise PageError(200, "cart.html", plan_id=plan_id, plan=plan, none_left=True, solo=solo)
         if solo:
-            tal = solo_tally(got[1], store.get_pick(plan_id), frozenset())
+            tal = solo_tally(got[1], store.get_pick(plan_id), blocked)
         else:
             tal = tally(got[1].top, store.votes(plan_id), store.get_pick(plan_id),
-                        sum(1 for m in cards if not m.sample))
+                        sum(1 for m in cards if not m.sample), blocked)
         win = next((r for r in got[1].top if r.candidate.product_id == tal["winner"]), None)
     if win is None and solo:
         raise refuse(409, "There is no pick to put in a cart yet. Start the fight from your card first.",
@@ -877,8 +893,9 @@ def _cart_context(request, deps, plan_id):
     return plan, got[1], tal, win
 
 
-def _runner_up(result: RankResult, tal: dict, win: Ranked) -> dict | None:
-    others = [r for r in result.top if r.candidate.product_id != win.candidate.product_id]
+def _runner_up(result: RankResult, tal: dict, win: Ranked, blocked: set[str] = frozenset()) -> dict | None:
+    others = [r for r in result.top if r.candidate.product_id != win.candidate.product_id
+              and r.candidate.product_id not in blocked]
     others.sort(key=lambda r: -tal["counts"].get(r.candidate.product_id, 0))
     if not others:
         return None
@@ -886,7 +903,7 @@ def _runner_up(result: RankResult, tal: dict, win: Ranked) -> dict | None:
     return {"title": c.title, "price": fmt(c.price_minor, c.precision)}
 
 
-def _render_cart(request, plan_id, plan, result, tal, win, view):
+def _render_cart(request, plan_id, plan, result, tal, win, view, blocked=frozenset(), moved_from=None):
     c = win.candidate
     unit = view.unit_minor if view.unit_minor is not None else c.price_minor
     return render(
@@ -894,7 +911,7 @@ def _render_cart(request, plan_id, plan, result, tal, win, view):
         option_title=c.option_title, view=view, unit=fmt(unit, view.precision),
         total=fmt(view.total_minor, view.precision),
         new_price=fmt(view.new_price_minor, view.precision) if view.new_price_minor is not None else None,
-        runner_up=_runner_up(result, tal, win) if view.unavailable else None,
+        runner_up=_runner_up(result, tal, win, blocked) if view.unavailable else None, moved_from=moved_from,
         solo=plan_mode(plan) == "solo",
         can_create=bool(view.missing) and not view.unavailable and view.new_price_minor is None)
 
@@ -927,7 +944,7 @@ def cart_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         raise
     except Exception as exc:   # LsApiError, a missing key, a network failure: say none of it
         return _cart_unavailable(request, exc)
-    return _render_cart(request, plan_id, plan, result, tal, win, view)
+    return _render_cart(request, plan_id, plan, result, tal, win, view, deps.store.not_cartable_ids(deps.now()))
 
 
 @router.post("/p/{plan_id}/cart")
@@ -959,7 +976,21 @@ def cart_create(plan_id: str, request: Request, form: dict = Depends(read_form),
         return _cart_busy(request)
     except Exception as exc:
         return _cart_unavailable(request, exc)
-    return _render_cart(request, plan_id, plan, result, tal, win, view)
+    moved_from = None
+    if view.not_cartable:
+        # LivingSocial cannot cart this offer: remember it, then move on to the next option
+        store.mark_not_cartable(win.candidate.product_id, deps.now())
+        moved_from = win.candidate.title
+        plan, result, tal, win = _cart_context(request, deps, plan_id)   # none left: the 200 "run it again" page
+        try:
+            view = make_carts(deps.ls, store, win, plan_id, None, deps.now(), create=False,
+                              solo=plan_mode(plan) == "solo")
+        except PlanNotFound:
+            raise
+        except Exception as exc:
+            return _cart_unavailable(request, exc)
+    return _render_cart(request, plan_id, plan, result, tal, win, view, store.not_cartable_ids(deps.now()),
+                        moved_from)
 
 
 def _demo_flag(plan) -> str:

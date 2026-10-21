@@ -18,6 +18,7 @@ from .fit import Member, RankResult
 TTL_DAYS = 14
 TTL_SECONDS = TTL_DAYS * 86400
 RATE_TTL_SECONDS = 2 * 86400
+NOT_CARTABLE_DAYS = 7      # LivingSocial: PRODUCT_NOT_CARTABLE means "Stop listing it"; we ask again after a week
 
 
 def hash_ip(ip: str, salt: str | None = None) -> str:
@@ -71,6 +72,8 @@ class Store(Protocol):
     def admin_failures(self, ip_hash: str, now: datetime) -> int: ...
     def count_plans(self, ip_hash: str, since: datetime) -> int: ...
     def count_all_plans(self, since: datetime) -> int: ...
+    def mark_not_cartable(self, product_id: str, now: datetime) -> None: ...
+    def not_cartable_ids(self, now: datetime) -> set[str]: ...
     def purge_expired(self, now: datetime) -> int: ...
 
 
@@ -85,6 +88,7 @@ CREATE TABLE IF NOT EXISTS carts (seq INTEGER PRIMARY KEY AUTOINCREMENT, plan_id
   option_id TEXT NOT NULL, cart_id TEXT NOT NULL, created_at TEXT, UNIQUE (plan_id, option_id, cart_id));
 CREATE TABLE IF NOT EXISTS cartcreates (plan_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS accepted (plan_id TEXT, option_id TEXT, price INTEGER NOT NULL, PRIMARY KEY (plan_id, option_id));
+CREATE TABLE IF NOT EXISTS notcartable (product_id TEXT PRIMARY KEY, marked_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS adminfail (ip_hash TEXT, hour TEXT, n INTEGER NOT NULL, PRIMARY KEY (ip_hash, hour));
 """
 _CHILDREN = ("cards", "results", "runs", "votes", "picks", "carts", "cartcreates", "accepted")
@@ -266,6 +270,15 @@ class SqliteStore:
                                (parse_ts(since).isoformat(),)).fetchone()
         return row[0]
 
+    def mark_not_cartable(self, product_id, now):
+        self._db.execute("INSERT OR REPLACE INTO notcartable VALUES (?,?)", (product_id, parse_ts(now).isoformat()))
+        self._db.commit()
+
+    def not_cartable_ids(self, now):
+        oldest = parse_ts(now) - timedelta(days=NOT_CARTABLE_DAYS)
+        rows = self._db.execute("SELECT product_id, marked_at FROM notcartable")
+        return {pid for pid, marked in rows if parse_ts(marked) >= oldest}
+
     def purge_expired(self, now):
         cutoff = (parse_ts(now) - timedelta(days=TTL_DAYS)).isoformat()
         ids = [r[0] for r in self._db.execute("SELECT id FROM plans WHERE created_at<?", (cutoff,))]
@@ -273,6 +286,8 @@ class SqliteStore:
             for table in _CHILDREN:
                 self._db.execute("DELETE FROM %s WHERE plan_id=?" % table, (pid,))
             self._db.execute("DELETE FROM plans WHERE id=?", (pid,))
+        self._db.execute("DELETE FROM notcartable WHERE marked_at<?",
+                         ((parse_ts(now) - timedelta(days=NOT_CARTABLE_DAYS)).isoformat(),))
         self._db.execute("DELETE FROM adminfail WHERE hour<?", (self._hour(parse_ts(now) - timedelta(hours=3)),))
         self._db.commit()
         return len(ids)

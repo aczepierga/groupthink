@@ -17,6 +17,7 @@ deadline. purge_expired is a no-op: Redis does the deleting. Raw IPs never reach
   gt:cartrec:<id>:<cart_id>      JSON cart record (carts())   string, one key per cart
   gt:cartcreates:<id>            carts claimed for creation   counter (claim INCRBYs, over the ceiling DECRBYs back)
   gt:accepted:<id>               option_id -> accepted price  hash
+  gt:notcartable                 product_id -> ISO time marked  hash, 7-day expiry refreshed on each write
   gt:adminfail:<ip_hash>:<yyyymmddhh>  wrong admin tokens     counter, 2-hour expiry
   gt:rate:<ip_hash>:<yyyymmdd>, gt:rate:all:<yyyymmdd>        counters, 2-day expiry
 
@@ -30,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from .debate import Line
 from .fit import Member, RankResult
 from .kv import Kv
-from .store import RATE_TTL_SECONDS, TTL_SECONDS, PlanNotFound, new_plan_id, parse_ts
+from .store import NOT_CARTABLE_DAYS, RATE_TTL_SECONDS, TTL_SECONDS, PlanNotFound, new_plan_id, parse_ts
 
 P = "gt:"
 
@@ -183,6 +184,16 @@ class DurableStore:
     def get_accepted_price(self, plan_id, option_id):
         raw = self.kv.hgetall(P + "accepted:" + plan_id).get(option_id)
         return int(raw) if raw is not None else None
+
+    # -- offers LivingSocial cannot cart (shared by every plan, so no plan deadline) --
+    def mark_not_cartable(self, product_id, now):
+        key = P + "notcartable"
+        self.kv.multi_exec([["HSET", key, product_id, parse_ts(now).isoformat()],
+                            ["EXPIRE", key, NOT_CARTABLE_DAYS * 86400]])
+
+    def not_cartable_ids(self, now):
+        oldest = parse_ts(now) - timedelta(days=NOT_CARTABLE_DAYS)
+        return {pid for pid, marked in self.kv.hgetall(P + "notcartable").items() if parse_ts(marked) >= oldest}
 
     # -- admin token throttle --
     def _admin_key(self, ip_hash, now):

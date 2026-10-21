@@ -425,3 +425,11 @@ def test_scout_budget_does_not_raise_when_nothing_gathered():
     c = SlowClient(clock, partner_s=11.0)
     r = scout(c, "Chicago", "massage", 5000, 2, "B", clock=clock)
     assert r.candidates == [] and r.queries_tried == ["massage"]
+
+
+def test_scout_skips_not_cartable_ids():
+    c = FakeClient(partner={"massage": [hit("p1", title="One"), hit("p2", title="Two"), hit("p3", title="Three")]})
+    r = scout(c, "Chicago", "massage", 5000, 2, "B", skip_ids={"p2"})
+    assert {x.product_id for x in r.candidates} == {"p1", "p3"}
+    r = scout(c, "Chicago", "massage", 5000, 2, "B")
+    assert {x.product_id for x in r.candidates} == {"p1", "p2", "p3"}

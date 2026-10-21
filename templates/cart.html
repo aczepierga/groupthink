@@ -1,12 +1,31 @@
 {% extends "base.html" %}
 {% block title %}GroupThink: the cart{% endblock %}
 {% block content %}
+{% if none_left %}
+<h1>The cart</h1>
+<p class="muted">{{ plan.city }}, {{ plan.date_text }}. <a href="/p/{{ plan_id }}/argue">Back to the picks</a></p>
+{% include "_copy.html" %}
+<section class="offer" aria-labelledby="cart-h">
+  <h2 id="cart-h">No cart for these offers</h2>
+  <div class="callout" role="status">
+    <p><strong>None of these can go in a cart. Run the search again.</strong></p>
+    {% if solo %}<p>LivingSocial cannot put any of your options in a cart. You can start the fight again from <a href="/p/{{ plan_id }}/card">your card page</a>.</p>
+    {% else %}<p>LivingSocial cannot put any of the group's options in a cart. The host can run the argument again from the <a href="/p/{{ plan_id }}">plan page</a>.</p>{% endif %}
+  </div>
+</section>
+{% else %}
 <h1>The cart</h1>
 <p class="muted">{{ plan.city }}, {{ plan.date_text }}. <a href="/p/{{ plan_id }}/argue">Back to the picks</a></p>
 {% include "_copy.html" %}
 {% if plan.demo %}<p class="callout" role="note">This is a demo plan with sample people. The cart is real: buy only if you actually want this deal.</p>{% endif %}
 
 <section class="offer" aria-labelledby="cart-h">
+  {% if moved_from %}
+  <div class="callout" role="status">
+    {% if solo %}<p>Your first pick, {{ moved_from }}, could not go in a cart, so this is the next option.</p>
+    {% else %}<p>The group's first pick, {{ moved_from }}, could not go in a cart, so this is the next option.</p>{% endif %}
+  </div>
+  {% endif %}
   <h2 id="cart-h">{{ title }}</h2>
   {% if option_title %}<p class="muted">Option: {{ option_title }}</p>{% endif %}
 
@@ -65,4 +84,5 @@
   </form>
   {% endif %}
 </section>
+{% endif %}
 {% endblock %}

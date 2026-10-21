@@ -438,3 +438,24 @@ def test_cart_creation_keys_expire_with_plan_and_throttle_keys_expire():
     assert len(txns) == 1 and [c[0] for c in txns[0]] == ["INCRBY", "EXPIREAT"]
     fake.advance(10 * DAY)
     assert [k for k in fake.keys() if k.startswith(("gt:cartcreates", "gt:accepted"))] == []
+
+
+def test_not_cartable_mark_and_expire(be):
+    s, t0 = be.store, now()
+    assert s.not_cartable_ids(t0) == set()
+    s.mark_not_cartable("p1", t0)
+    assert s.not_cartable_ids(t0) == {"p1"}
+    assert s.not_cartable_ids(t0 + timedelta(days=7)) == {"p1"}
+    assert s.not_cartable_ids(t0 + timedelta(days=7, seconds=1)) == set()
+
+
+def test_durable_not_cartable_hash_expires_in_seven_days_refreshed_on_write():
+    s, fake = _durable()
+    t0 = now()
+    s.mark_not_cartable("p1", t0)
+    assert fake.ttl("gt:notcartable") == 7 * DAY
+    fake.advance(3 * DAY)
+    s.mark_not_cartable("p2", t0 + timedelta(days=3))
+    assert fake.ttl("gt:notcartable") == 7 * DAY
+    fake.advance(7 * DAY + 1)
+    assert s.not_cartable_ids(t0 + timedelta(days=10)) == set()
