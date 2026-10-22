@@ -7,9 +7,10 @@ from groupthink.fit import (Excluded, Member, Ranked, RankResult, Verdict, fixed
 
 
 def cand(pid="p1", oid="o1", title="Thing", price=8000, original=None, party=2, bound="exactly",
-         min_units=1, max_units=None, facts=None, highlights=None, categories=None, fine_print=None):
+         min_units=1, max_units=None, facts=None, highlights=None, categories=None, fine_print=None,
+         option_title=""):
     return Candidate(
-        product_id=pid, option_id=oid, permalink=None, title=title, option_title="", merchant=None,
+        product_id=pid, option_id=oid, permalink=None, title=title, option_title=option_title, merchant=None,
         place="", city="", price_minor=price, original_minor=original, precision=2,
         party_size=party, party_bound=bound, min_units=min_units, max_units=max_units,
         fine_print=fine_print, highlights=highlights or [], categories=categories or [],
@@ -332,3 +333,62 @@ def test_fixed_date_comma_time_is_not_a_second_day():
     c.option_title = "Oct 23, 7pm Show"
     from groupthink.fit import offer_fixed_date
     assert offer_fixed_date(c, TODAY) == "2026-10-23"
+
+
+# --- word matching, every blocking word, younger-guest offers (Task 3) -------------------------
+
+def test_hard_no_matches_plurals_and_option_title():
+    r = rank([cand(title="Arcade Games Night")], [member(hard_nos=["game"])])
+    assert not r.shortlist and r.excluded[0].reason == "hard_no:game"
+    r = rank([cand(title="Fun Evening", option_title="Pickleball Classes")], [member(hard_nos=["class"])])
+    assert not r.shortlist and r.excluded[0].reason == "hard_no:class"
+    r = rank([cand(title="Party Night")], [member(hard_nos=["art"])])
+    assert r.shortlist and not r.excluded
+
+
+def test_likes_match_plurals():
+    r = rank([cand(title="Pizzas Galore")], [member(likes=["pizza"])])
+    assert r.shortlist[0].verdicts[0].likes_matched == ["pizza"]
+    assert r.likes_matched_any is True
+    r = rank([cand(title="Bowling")], [member(likes=["pizza"])])
+    assert r.likes_matched_any is False
+
+
+def test_blocking_words_lists_every_word_per_member():
+    ann = member("a", hard_nos=["spa", "massage", "spa"], name="Ann")
+    bo = member("b", hard_nos=["tour"], name="Bo")
+    two_options = [cand(pid="p1", oid="o1", title="Spa Massage Tour"),
+                   cand(pid="p1", oid="o2", title="Spa Massage Tour")]
+    r = rank(two_options, [ann, bo])
+    assert r.emptied_by == "hard_no:spa"
+    got = sorted((b["member_id"], b["word"]) for b in r.blocking_words)
+    assert got == [("a", "massage"), ("a", "spa"), ("b", "tour")]
+    assert RankResult.from_dict(r.to_dict()).blocking_words == r.blocking_words
+
+
+def test_old_result_without_new_fields_loads():
+    d = rank([cand()], group(1)).to_dict()
+    for k in ("blocking_words", "young_dropped", "likes_matched_any"):
+        d.pop(k)
+    r = RankResult.from_dict(d)
+    assert (r.blocking_words, r.young_dropped, r.likes_matched_any) == ([], 0, True)
+
+
+def test_young_only_excluded_for_adult_groups():
+    c = cand(title="Halloween Spooky Kids Cruise")
+    r = rank([c], group(2))
+    assert not r.shortlist and r.excluded[0].reason == "young_only"
+    assert r.emptied_by == "young_only" and r.young_dropped == 1
+    assert rank([c], [member("m0", kids=True), member("m1")]).shortlist
+    r = rank([cand(title="Evening Cruise", option_title="Children Under 12")], group(2))
+    assert r.excluded and r.excluded[0].reason == "young_only"
+
+
+def test_young_only_keeps_adult_offers():
+    kept = [cand(pid="a", title="Bowling Night", categories=["Youth Sports"]),
+            cand(pid="b", title="Kids Eat Free Brunch"), cand(pid="c", title="Kid-friendly Brunch"),
+            cand(pid="d", title="Junior's Cheesecake"), cand(pid="e", title="Fountain of Youth Spa"),
+            cand(pid="f", title="Junior Suite")]
+    r = rank(kept, group(2))
+    assert not r.excluded and r.young_dropped == 0
+    assert len(r.shortlist) == 5 and len(r.top) == 3

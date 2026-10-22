@@ -33,6 +33,9 @@
   </p>
   {% endif %}
 
+  {% if young_note %}<p class="muted">Some offers made for younger guests were left out.</p>{% endif %}
+  {% if no_likes_note %}<p class="muted">{% if solo %}None of the offers found matched your likes, so these are the closest.{% else %}None of the offers found matched the likes on the cards, so these are the closest.{% endif %}</p>{% endif %}
+
   {% if empty %}
   <div class="callout" role="status">
     {% if empty.kind == "away" %}
@@ -51,12 +54,14 @@
       {% endif %}
     {% elif solo and empty.kind == "hard_no" %}
       <p><strong>A hard no on your card emptied the list.</strong> Nothing was relaxed.</p>
-      {% if owns_hard_no %}
+      {% if own_words %}
+      {% for w in own_words %}
       <form method="post" action="/p/{{ plan_id }}/relax">
-        <p>It is your hard no: <strong>{{ empty.word }}</strong>. Only you can drop it.</p>
-        <input type="hidden" name="drop" value="hard_no:{{ empty.word }}">
+        <p>It is your hard no: <strong>{{ w }}</strong>. Only you can drop it.</p>
+        <input type="hidden" name="drop" value="hard_no:{{ w }}">
         <button type="submit">Drop this hard no</button>
       </form>
+      {% endfor %}
       {% else %}<p>Only the person who made this plan can drop it, from their own browser. Nothing changes until they do.</p>{% endif %}
     {% elif solo and empty.kind == "kids_21" %}
       <p><strong>Some 21+ offers were left out because kids are coming.</strong> Nothing was relaxed.</p>
@@ -72,18 +77,22 @@
       </form>
       {% else %}<p>The host can see what it would take. Members can raise their own budget on their own card.</p>{% endif %}
     {% elif empty.kind == "hard_no" %}
-      <p><strong>A hard no on someone's card emptied the list.</strong> Nothing was relaxed.</p>
-      {% if owns_hard_no %}
+      <p><strong>Hard no's on {{ empty.cards }} card{% if empty.cards != 1 %}s{% endif %} ruled every offer out.</strong> Nothing was relaxed.</p>
+      {% if own_words %}
+      {% for w in own_words %}
       <form method="post" action="/p/{{ plan_id }}/relax">
-        <p>It is your hard no: <strong>{{ empty.word }}</strong>. Only you can drop it.</p>
-        <input type="hidden" name="drop" value="hard_no:{{ empty.word }}">
+        <p>It is your hard no: <strong>{{ w }}</strong>. Only you can drop it.</p>
+        <input type="hidden" name="drop" value="hard_no:{{ w }}">
         <button type="submit">Drop this hard no</button>
       </form>
+      {% endfor %}
       {% else %}<p>Only the member who set it can drop it, from their own browser. Nothing changes until they do.</p>{% endif %}
     {% elif empty.kind == "kids_21" %}
       <p><strong>Some 21+ offers were left out so the plan suits everyone.</strong> Nothing was relaxed.</p>
     {% elif empty.kind == "quantity" %}
       <p><strong>Every offer left cannot be bought in the quantity your group needs.</strong> Nothing was relaxed.</p>
+    {% elif empty.kind == "young_only" %}
+      <p><strong>Every offer left is made for younger guests.</strong> Nothing was relaxed.</p>
     {% elif empty.kind == "date" %}
       <p><strong>Every offer left is for a different fixed date than your plan.</strong> Nothing was relaxed.</p>
     {% else %}

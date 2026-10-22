@@ -171,15 +171,19 @@ def _referee_line(rng, used, result: RankResult, solo: bool = False) -> tuple[Li
         t = _pick(rng, pool, used).format(title=_clean(top.candidate.title), fit=fit)
         return Line("Referee", "referee", t, top.candidate.product_id), "referee_pick"
     reason = result.emptied_by
-    if reason is None and not result.shortlist:
+    if reason is None and not result.shortlist and not (result.partner_empty or result.away_dropped):
         pool, code = (L.SOLO_REFEREE_NONE if solo else L.REFEREE_NONE), "referee_none"
     else:
         if reason == "budget":
             key = "budget"
         elif reason and reason.startswith("hard_no"):
             key = "hard_no"
-        elif reason in ("kids_21", "quantity"):
+        elif reason in ("kids_21", "quantity", "date", "young_only"):
             key = reason
+        elif reason is None and result.partner_empty:
+            key = "budget_cap"
+        elif reason is None and result.away_dropped:
+            key = "away"
         else:
             key = "other"
         pool, code = (L.SOLO_REFEREE_EMPTY if solo else L.REFEREE_EMPTY)[key], f"referee_{key}"

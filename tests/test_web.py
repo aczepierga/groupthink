@@ -1025,7 +1025,7 @@ def test_drop_hard_no_button_only_for_owner():
     owner = bo.get(f"/p/{pid}/argue").text
     assert form in owner and 'value="hard_no:karaoke"' in owner
     # the constraint is named to everyone, but the word is only for the member who set it
-    assert "emptied the list" in host.get(f"/p/{pid}/argue").text
+    assert "ruled every offer out" in host.get(f"/p/{pid}/argue").text
     assert "karaoke" not in host.get(f"/p/{pid}/argue").text.lower()
 
 
@@ -1149,11 +1149,11 @@ def test_emptying_hard_no_word_only_visible_to_owner():
     argue(host, pid)
     for who in (host, env.browser()):
         t = who.get(f"/p/{pid}/argue").text
-        assert "a hard no on someone" in t.lower() and "emptied the list" in t
+        assert "Hard no's on 1 card ruled every offer out." in t
         assert "karaoke" not in t.lower() and "Drop this hard no" not in t
         assert f'action="/p/{pid}/relax"' not in t
     owner = bo.get(f"/p/{pid}/argue").text
-    assert "emptied the list" in owner
+    assert "ruled every offer out" in owner
     assert "karaoke" in owner and "Drop this hard no" in owner and 'value="hard_no:karaoke"' in owner
 
 
@@ -1559,3 +1559,81 @@ def test_date_emptied_list_has_its_own_copy():
     t = host.get(f"/p/{pid}/argue").text
     assert "Every offer left is for a different fixed date than your plan." in t
     assert 'class="offer"' not in t
+
+
+# ---- Task 3: every blocking word, younger-guest offers, likes note ---------------------------------
+
+def blocked_env():
+    hits = [p_hit("p1", "Spa Massage Tour", 3000), p_hit("p2", "Tour of the Massage Spa", 2500)]
+    return Env(ls=FakeLs(hits=hits))
+
+
+def blocked_plan(env):
+    host = env.browser()
+    pid = new_plan(host, group_size="2")
+    card(host, pid, "Ann", "50", hard_nos="spa, massage")
+    bo = env.browser()
+    card(bo, pid, "Bo", "50", hard_nos="tour")
+    argue(host, pid)
+    return pid, host, bo
+
+
+def test_every_blocking_word_shown_only_to_its_owner():
+    env = blocked_env()
+    pid, ann, bo = blocked_plan(env)
+    t = ann.get(f"/p/{pid}/argue").text
+    assert 'value="hard_no:spa"' in t and 'value="hard_no:massage"' in t and 'value="hard_no:tour"' not in t
+    t = bo.get(f"/p/{pid}/argue").text
+    assert 'value="hard_no:tour"' in t and 'value="hard_no:spa"' not in t and "massage" not in t.lower()
+    t = env.browser().get(f"/p/{pid}/argue").text
+    assert "Hard no's on 2 cards ruled every offer out." in t
+    assert "hard_no:" not in t and "massage" not in t.lower() and "tour" not in t.lower()
+
+
+def test_card_page_offers_each_owned_word():
+    env = blocked_env()
+    pid, ann, bo = blocked_plan(env)
+    t = ann.get(f"/p/{pid}/card").text
+    assert 'value="hard_no:spa"' in t and 'value="hard_no:massage"' in t and 'value="hard_no:tour"' not in t
+    t = bo.get(f"/p/{pid}/card").text
+    assert 'value="hard_no:tour"' in t and 'value="hard_no:spa"' not in t
+
+
+def young_env(titles):
+    return Env(ls=FakeLs(hits=[p_hit(f"p{i}", t, 2000 + i) for i, t in enumerate(titles, 1)], agent=False))
+
+
+def test_young_only_note_has_no_kid_words():
+    env = young_env(["Halloween Spooky Kids Cruise", "Pottery Wheel Night", "Axe Throwing Hour"])
+    pid, host, _ = group(env)
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "Some offers made for younger guests were left out." in t
+    low = t.lower()
+    assert "kid" not in low and "child" not in low
+    env = young_env(["Spooky Kids Cruise", "Children Painting Party"])
+    pid, host, _ = group(env)
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "Every offer left is made for younger guests." in t
+    assert "kid" not in t.lower() and "child" not in t.lower()
+
+
+def test_no_likes_matched_note():
+    env = Env()
+    pid, host, _ = group(env, likes="zebra")
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "None of the offers found matched the likes on the cards, so these are the closest." in t
+    env2 = Env()
+    pid, host, _ = group(env2, likes="pottery")
+    argue(host, pid)
+    assert "None of the offers found matched" not in host.get(f"/p/{pid}/argue").text
+    env3 = Env()
+    c = env3.browser()
+    pid = new_solo(c)
+    card(c, pid, "Ann", "50", likes="zebra")
+    argue(c, pid)
+    t = c.get(f"/p/{pid}/argue").text
+    assert "None of the offers found matched your likes, so these are the closest." in t
+    no_group_words(t)

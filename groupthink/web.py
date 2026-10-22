@@ -486,17 +486,39 @@ def _card_values(member: Member | None) -> dict:
             "share_numbers": member.share_numbers}
 
 
+def _blocking(result: RankResult) -> list[dict]:
+    """Every hard-no word that ruled out an offer. Results saved before blocking_words existed fall back to
+    the one word in emptied_by, with no member attached."""
+    if result.blocking_words:
+        return list(result.blocking_words)
+    reason = result.emptied_by or ""
+    if reason.startswith("hard_no:"):
+        return [{"word": reason.split(":", 1)[1], "member_id": None}]
+    return []
+
+
+def _own_blocking_words(result: RankResult, member) -> list[str]:
+    """The blocking words this member set and still has on their card, one entry per word."""
+    if member is None:
+        return []
+    out: list[str] = []
+    for b in _blocking(result):
+        if b.get("member_id") not in (member.id, None) or not _has_word(member, b["word"]):
+            continue
+        if b["word"].strip().casefold() not in {w.strip().casefold() for w in out}:
+            out.append(b["word"].strip())
+    return out
+
+
 def _relax_offer(store, plan_id, member):
-    """The hard-no word that emptied the last run, when this member is the one who set it."""
+    """The hard-no words that emptied the last run, when this member is the one who set them."""
     got = store.get_result(plan_id)
     if member is None or got is None:
-        return None
+        return []
     result = got[1]
-    reason = result.emptied_by or ""
-    if not result.top and reason.startswith("hard_no:"):
-        word = reason.split(":", 1)[1]
-        return word if _has_word(member, word) else None
-    return None
+    if not result.top and (result.emptied_by or "").startswith("hard_no:"):
+        return _own_blocking_words(result, member)
+    return []
 
 
 def _card_page(request, deps, plan_id, plan, cards, status=200, values=None, error=None, lost_seat=False):
@@ -507,7 +529,7 @@ def _card_page(request, deps, plan_id, plan, cards, status=200, values=None, err
     return render(request, "card.html", status if not full else 409, plan_id=plan_id, plan=plan, me=me,
                   full=full, values=values or _card_values(me), error=error,
                   saved=request.query_params.get("saved") == "1",
-                  relax_word=_relax_offer(deps.store, plan_id, me), solo=solo,
+                  relax_words=_relax_offer(deps.store, plan_id, me), solo=solo,
                   host=host, runs=deps.store.argue_count(plan_id),
                   max_runs=MAX_RUNS)
 
@@ -781,8 +803,9 @@ def _empty_view(result: RankResult, city: str = "") -> dict | None:
     if reason == "budget":
         return {"kind": "budget", "cheapest": _cheapest(result)}
     if reason.startswith("hard_no:"):
-        return {"kind": "hard_no", "word": reason.split(":", 1)[1]}
-    if reason in ("kids_21", "quantity", "date"):
+        owners = {b.get("member_id") for b in _blocking(result)}
+        return {"kind": "hard_no", "cards": max(len(owners), 1)}
+    if reason in ("kids_21", "quantity", "date", "young_only"):
         return {"kind": reason}
     return {"kind": "none"}
 
@@ -852,11 +875,14 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     host = is_host(request, plan_id, plan)
     me = current_member(request, plan_id, cards)
     empty = _empty_view(result, plan["city"])
-    owns_hard_no = bool(empty and empty["kind"] == "hard_no" and me and _has_word(me, empty["word"]))
+    own_words = _own_blocking_words(result, me) if empty and empty["kind"] == "hard_no" else []
+    young_note = bool(result.young_dropped) and not (empty and empty["kind"] == "young_only")
+    no_likes_note = bool(result.shortlist) and not result.likes_matched_any
     return render(
         request, "argue.html", plan_id=plan_id, plan=plan,
         lines=_lines_with_rounds(lines), rounds=_round_count(lines),
-        offers=offers, empty=empty, owns_hard_no=owns_hard_no, thin=_thin_view(result, plan["city"]),
+        offers=offers, empty=empty, own_words=own_words, young_note=young_note,
+        no_likes_note=no_likes_note, thin=_thin_view(result, plan["city"]),
         not_cartable_label=NOT_CARTABLE_LABEL, winner=winner, final=tal["final"], reason=tal["reason"], leaders=tal["leaders"], host=host,
         can_pick=host and tal["pickable"] and tal["best"] > 0 and len(tal["leaders"]) > 1,
         can_vote=me is not None and not solo, solo=solo, can_switch=solo and host and winner is not None,

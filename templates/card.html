@@ -13,12 +13,17 @@
   {% if saved %}{% if solo %}<p class="notice" role="status">Saved. You can edit your card and start the fight again.</p>
   {% else %}<p class="notice" role="status">Saved. You can edit your card until the host reruns the argument.</p>{% endif %}{% endif %}
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-  {% if relax_word %}
-  <form method="post" action="/p/{{ plan_id }}/relax" class="stack callout">
-    <p>The last run found nothing because of your hard no: <strong>{{ relax_word }}</strong>. Only you can drop it.</p>
-    <input type="hidden" name="drop" value="hard_no:{{ relax_word }}">
-    <button type="submit" class="secondary">Drop this hard no</button>
-  </form>
+  {% if relax_words %}
+  <div class="stack callout">
+    <p>The last run found nothing because of {% if relax_words|length > 1 %}your hard no's{% else %}your hard no{% endif %}. Only you can drop {% if relax_words|length > 1 %}them{% else %}it{% endif %}.</p>
+    {% for w in relax_words %}
+    <form method="post" action="/p/{{ plan_id }}/relax" class="stack">
+      <p>Your hard no: <strong>{{ w }}</strong></p>
+      <input type="hidden" name="drop" value="hard_no:{{ w }}">
+      <button type="submit" class="secondary">Drop this hard no</button>
+    </form>
+    {% endfor %}
+  </div>
   {% endif %}
   {% if solo and me and host %}
   <section aria-labelledby="fight-h">

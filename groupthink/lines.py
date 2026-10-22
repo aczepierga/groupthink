@@ -279,6 +279,26 @@ REFEREE_EMPTY = {
         "Too few vouchers are available on most offers, and none are left. Try another city or theme.",
         "Most offers do not have enough vouchers for everyone, so none are left. Try another city or theme.",
     ],
+    "away": [
+        "Live search found offers, but none in your area. The host can try a nearby city and I will rerun.",
+        "Nothing I found is in or near your city. The host can try a nearby city, then I go again.",
+        "Every offer was too far away. The host can pick a nearby city and I will rerun.",
+    ],
+    "date": [
+        "Every offer left is tied to a different date than your plan. Try another date or theme.",
+        "The offers I found are for fixed dates that miss your plan. Try another date or theme.",
+        "All that remain are fixed-date events on the wrong day. Try another date or theme.",
+    ],
+    "young_only": [
+        "Everything left is made for younger guests, not for an adult plan. Try another city or theme.",
+        "The offers left are all for younger guests, so none suit this plan. Try another city or theme.",
+        "I only found offers for younger guests, and none fit this plan. Try another city or theme.",
+    ],
+    "budget_cap": [
+        "Nothing came back at or under the top budget. A member can raise one, or the host can try a nearby city.",
+        "Nothing was priced at or under the highest budget here. Raise a budget or try a nearby city.",
+        "The search came back empty at this price. A member can raise a budget, or the host a nearby city.",
+    ],
     "other": [
         "Nothing fit the group's needs this time. The host can relax a constraint and I will rerun.",
         "No offer made it through the group's needs. The host can relax something and I go again.",
@@ -400,6 +420,26 @@ SOLO_REFEREE_EMPTY = {
         "Most offers lack enough vouchers and none are left. Try another city or theme.",
         "Too few vouchers are available on most offers, and none are left. Try another city or theme.",
         "Most offers do not have enough vouchers for you, so none are left. Try another city or theme.",
+    ],
+    "away": [
+        "Live search found offers, but none in your area. Try a nearby city and I will rerun.",
+        "Nothing I found is in or near your city. Try a nearby city, then I go again.",
+        "Every offer was too far away. Pick a nearby city and I will rerun.",
+    ],
+    "date": [
+        "Every offer left is tied to a different date than your plan. Try another date or theme.",
+        "The offers I found are for fixed dates that miss your plan. Try another date or theme.",
+        "All that remain are fixed-date events on the wrong day. Try another date or theme.",
+    ],
+    "young_only": [
+        "Everything left is made for younger guests, not for an adult plan. Try another city or theme.",
+        "The offers left are all for younger guests, so none suit you. Try another city or theme.",
+        "I only found offers for younger guests, and none fit this plan. Try another city or theme.",
+    ],
+    "budget_cap": [
+        "No offers came back at or under your budget. Raise it or try a nearby city.",
+        "Nothing was priced at or under your budget. Raise it or try a nearby city.",
+        "The search came back empty at this price. Raise your budget or try a nearby city.",
     ],
     "other": [
         "Nothing fit your needs this time. Relax one and I will rerun.",

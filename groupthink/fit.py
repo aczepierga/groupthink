@@ -6,7 +6,7 @@ Member text is untrusted: truncated, keyword-matched with escaped word-boundary 
 """
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date
 
 from .candidates import Candidate, title_party  # noqa: F401  (title_party is part of this module's interface)
@@ -102,7 +102,7 @@ class Ranked:
 class Excluded:
     product_id: str
     title: str
-    reason: str   # hard_no:<word> | kids_21 | date | quantity
+    reason: str   # hard_no:<word> | kids_21 | young_only | date | quantity
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -121,13 +121,18 @@ class RankResult:
     adult_dropped: int = 0   # set by the /argue handler from the Scout result; rank() leaves 0
     away_dropped: int = 0    # likewise: products with no location in the plan's area
     partner_empty: bool = False   # likewise: the Partner search returned zero products
+    blocking_words: list = field(default_factory=list)   # [{"word", "member_id"}] for every fully excluded product
+    young_dropped: int = 0        # products left out because they are made for younger guests
+    likes_matched_any: bool = True   # False when members have likes but no shortlisted option matched one
 
     def to_dict(self) -> dict:
         return {"shortlist": [r.to_dict() for r in self.shortlist],
                 "top": [r.to_dict() for r in self.top],
                 "excluded": [e.to_dict() for e in self.excluded],
                 "emptied_by": self.emptied_by, "adult_dropped": self.adult_dropped,
-                "away_dropped": self.away_dropped, "partner_empty": self.partner_empty}
+                "away_dropped": self.away_dropped, "partner_empty": self.partner_empty,
+                "blocking_words": [dict(b) for b in self.blocking_words], "young_dropped": self.young_dropped,
+                "likes_matched_any": self.likes_matched_any}
 
     @classmethod
     def from_dict(cls, d: dict) -> "RankResult":
@@ -135,7 +140,10 @@ class RankResult:
                    top=[Ranked.from_dict(r) for r in d["top"]],
                    excluded=[Excluded.from_dict(e) for e in d["excluded"]],
                    emptied_by=d["emptied_by"], adult_dropped=d.get("adult_dropped", 0),
-                   away_dropped=d.get("away_dropped", 0), partner_empty=bool(d.get("partner_empty", False)))
+                   away_dropped=d.get("away_dropped", 0), partner_empty=bool(d.get("partner_empty", False)),
+                   blocking_words=[dict(b) for b in d.get("blocking_words", [])],
+                   young_dropped=d.get("young_dropped", 0),
+                   likes_matched_any=bool(d.get("likes_matched_any", True)))
 
 
 _MONTH_DAY_RX = re.compile(
@@ -204,12 +212,26 @@ def per_member_spend_minor(c: Candidate, qty: int, group_size: int) -> int:
 def _word_in(word: str, hay: list[str]) -> bool:
     if not word or not word.strip():
         return False
-    rx = re.compile(r"(?<!\w)" + re.escape(word) + r"(?!\w)", re.IGNORECASE)
+    rx = re.compile(r"(?<!\w)" + re.escape(word) + r"(?:s|es)?(?!\w)", re.IGNORECASE)
     return any(rx.search(h) for h in hay)
 
 
 def _haystack(c: Candidate) -> list[str]:
-    return [s for s in [c.title, *c.categories, *c.highlights] if isinstance(s, str)]
+    return [s for s in [c.title, c.option_title, *c.categories, *c.highlights] if isinstance(s, str)]
+
+
+_YOUNG_RX = re.compile(r"\b(kids?|children|toddlers?)\b", re.IGNORECASE)
+_YOUNG_OK_RX = re.compile(r"[- ]?(eat|eats|friendly|welcome|free|stay|stays)\b", re.IGNORECASE)
+
+
+def made_for_young(c: Candidate) -> bool:
+    """True when the option title or title names younger guests, unless every mention is an adult-friendly
+    phrase ("kids eat free", "kid-friendly"). Categories are not read."""
+    for text in (c.option_title, c.title):
+        for m in _YOUNG_RX.finditer(text or ""):
+            if not _YOUNG_OK_RX.match(text, m.end()):
+                return True
+    return False
 
 
 def _discount_pct(c: Candidate) -> int | None:
@@ -242,21 +264,28 @@ def rank(cands: list[Candidate], members: list[Member], solo: bool = False,
     plan_iso = parse_plan_date(plan_date_text, today) if today else None
     group = max(len(members), 1)
     any_kids = any(m.kids for m in members)
-    hard_nos = [w for m in members for w in m.hard_nos if w.strip()]
 
     survivors: list[tuple[tuple, Ranked]] = []
     reasons: dict[str, str] = {}       # product_id -> first exclusion reason
+    blocking: dict[str, list[dict]] = {}   # product_id -> every hard-no word that hit any of its options
     titles: dict[str, str] = {}
     for c in cands:
         hay = _haystack(c)
         qty = quantity_needed(len(members), c.party_size, c.party_bound, c.min_units, c.title_party)
         reason = None
-        for w in hard_nos:
-            if _word_in(w, hay):
-                reason = f"hard_no:{w}"
-                break
+        hits = [{"word": w, "member_id": m.id} for m in members for w in m.hard_nos
+                if w.strip() and _word_in(w, hay)]
+        if hits:
+            reason = "hard_no:" + hits[0]["word"]
+            seen = blocking.setdefault(c.product_id, [])
+            for b in hits:
+                if not any(b["member_id"] == x["member_id"] and b["word"].casefold() == x["word"].casefold()
+                           for x in seen):
+                    seen.append(b)
         if reason is None and any_kids and c.facts.age_21 is True:
             reason = "kids_21"
+        if reason is None and not any_kids and made_for_young(c):
+            reason = "young_only"
         fixed = offer_fixed_date(c, today) if today else None
         if reason is None and fixed and (fixed < today.isoformat() or (plan_iso and fixed != plan_iso)):
             reason = "date"
@@ -306,4 +335,16 @@ def rank(cands: list[Candidate], members: list[Member], solo: bool = False,
             emptied_by = Counter(e.reason for e in excluded).most_common(1)[0][0]
     elif not top:
         emptied_by = "budget"
-    return RankResult(shortlist, top, excluded, emptied_by)
+    out_pids = {e.product_id for e in excluded}
+    blocking_words: list[dict] = []
+    for pid in out_pids:
+        for b in blocking.get(pid, []):
+            if not any(b["member_id"] == x["member_id"] and b["word"].casefold() == x["word"].casefold()
+                       for x in blocking_words):
+                blocking_words.append(b)
+    young_dropped = sum(1 for e in excluded if e.reason == "young_only")
+    has_likes = any(l.strip() for m in members for l in m.likes)
+    likes_matched_any = (not has_likes or not shortlist
+                         or any(v.likes_matched for r in shortlist for v in r.verdicts))
+    return RankResult(shortlist, top, excluded, emptied_by, blocking_words=blocking_words,
+                      young_dropped=young_dropped, likes_matched_any=likes_matched_any)

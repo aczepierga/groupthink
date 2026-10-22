@@ -554,3 +554,28 @@ def test_group_mode_unchanged():
     base = run_debate(res, members, 7, today=TODAY)
     assert base == run_debate(res, members, 7, today=TODAY, mode="group")
     assert [(ln.speaker, ln.kind, ln.text, ln.product_id) for ln in base] == GROUP_SNAPSHOT
+
+
+def test_new_empty_kinds_have_referee_lines():
+    import re as _re
+    for solo in (False, True):
+        pools = L.SOLO_REFEREE_EMPTY if solo else L.REFEREE_EMPTY
+        for key in ("away", "date", "young_only", "budget_cap"):
+            assert key in pools and len(pools[key]) >= 3, (solo, key)
+            for t in pools[key]:
+                assert "\u2014" not in t and "\u2013" not in t and "kid" not in t.lower() and "child" not in t.lower()
+                if solo:
+                    assert not _re.search(r"group|everyone|vote|\bhost\b|someone", t.lower()), t
+        m = [member("m0", "Ann")]
+        for key in ("away", "date", "young_only", "budget_cap"):
+            res = rank([], m)
+            if key == "away":
+                res.away_dropped = 3
+            elif key == "budget_cap":
+                res.partner_empty = True
+            else:
+                res.emptied_by = key
+                res.excluded = [Excluded("x1", "Some Offer", key)]
+            out = run_debate(res, m, 4, today=TODAY, mode="solo" if solo else "group")
+            last = out[-1]
+            assert last.kind == "referee" and last.text in pools[key], (solo, key, last.text)
