@@ -524,8 +524,12 @@ def test_admin_csv_has_no_customer_fields(monkeypatch):
     assert body["cart-2"][1:4] == [pid, "CHECKED_OUT", "true"]
     assert body["cart-1"][1:4] == [pid, "ACTIVE", "false"]
     assert body["cart-1"][4] == T0.isoformat()
-    for needle in ("11111111-2222", "buyLink", BUY_HOST, "http", "Ann", "Bo", "Cy", "utm_"):
+    for needle in ("11111111-2222", "buyLink", BUY_HOST, "http", "utm_"):
         assert needle not in r.text, needle
+    # Member names must never be a field; compare whole cells (a random plan id may contain "Bo").
+    cells = {cell for row in rows for cell in row}
+    for name in ("Ann", "Bo", "Cy"):
+        assert name not in cells, name
 
 
 def test_admin_csv_marks_unreadable_carts(monkeypatch):
