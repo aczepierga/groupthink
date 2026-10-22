@@ -100,9 +100,9 @@ def test_solo_seat_cannot_be_filled_by_a_non_host_before_the_host_saves():
     pid = new_solo(host)
     stranger = env.browser()
     r = stranger.get(f"/p/{pid}/card")
-    assert r.status_code == 409 and "full" in r.text.lower()
+    assert r.status_code == 409 and "belongs to another browser" in r.text
     r = card(stranger, pid, "Mallory", expect=409)
-    assert "full" in r.text.lower()
+    assert "belongs to another browser" in r.text
     assert env.store.cards(pid) == []
     card(host, pid, "Ann")
     assert [m.name for m in env.store.cards(pid)] == ["Ann"]

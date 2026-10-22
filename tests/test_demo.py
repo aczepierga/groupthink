@@ -142,6 +142,7 @@ def test_demo_missing_city_is_400(env):
 def test_home_has_secondary_demo_form(env):
     t = env.browser().get("/").text
     assert 'action="/demo"' in t and "Try it with sample friends" in t
+    assert "Just looking? Watch a demo fight with sample friends" in t
     form = re.search(r'<form[^>]*action="/demo".*?</form>', t, re.S).group(0)
     for city in ("Chicago", "Austin", "New York"):
         assert f'value="{city}"' in form

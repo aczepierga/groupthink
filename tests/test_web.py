@@ -1806,3 +1806,112 @@ def test_debate_carries_run_number(env):
     assert re.search(r'<ol id="debate"[^>]*data-run="1"', host.get(f"/p/{pid}/argue").text)
     argue(host, pid)
     assert re.search(r'<ol id="debate"[^>]*data-run="2"', host.get(f"/p/{pid}/argue").text)
+
+
+# ---- task 6 polish: demo strip, favicon, tap targets, date hint, budget commas, solo stranger, 404 ----
+
+DEMO_STRIP_COPY = "Just looking? Watch a demo fight with sample friends"
+
+
+def test_demo_strip_comes_before_the_modes(env):
+    t = env.browser().get("/").text
+    assert DEMO_STRIP_COPY in t
+    demo_at = re.search(r'<form[^>]*action="/demo"', t).start()
+    solo_at = re.search(r'<form[^>]*action="/solo"', t).start()
+    group_at = re.search(r'<form[^>]*action="/plans"', t).start()
+    assert t.index(DEMO_STRIP_COPY) < solo_at
+    assert demo_at < solo_at < group_at
+    ids = re.findall(r'\bid="([^"]*)"', t)
+    assert len(ids) == len(set(ids)), [i for i in ids if ids.count(i) > 1]
+
+
+def test_favicon_served(env):
+    import struct
+    c = env.browser()
+    a = c.get("/static/favicon.png")
+    b = c.get("/favicon.ico")
+    for r in (a, b):
+        assert r.status_code == 200
+        assert r.headers["content-type"].split(";")[0] == "image/png"
+        assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+        assert struct.unpack(">II", r.content[16:24]) == (32, 32)
+    assert a.content == b.content
+    assert re.search(r'<link rel="icon" href="/static/favicon.png" type="image/png">', c.get("/").text)
+    assert "Content-Security-Policy" in b.headers
+
+
+def test_chrome_links_are_tap_sized():
+    from pathlib import Path
+    css = (Path(__file__).resolve().parent.parent / "static" / "style.css").read_text()
+    for selector in (".brand", ".topbar-link", ".footlinks a"):
+        block = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+        assert block, selector
+        body = block.group(1)
+        assert "display: inline-flex" in body, selector
+        assert "align-items: center" in body, selector
+        assert "min-height: 44px" in body, selector
+
+
+def test_date_placeholder_is_next_saturday(env):
+    from datetime import date
+    assert web.next_saturday_hint(date(2026, 10, 22)) == "Sat Oct 24, evening"
+    assert web.next_saturday_hint(date(2026, 10, 24)) == "Sat Oct 31, evening"
+    assert web.next_saturday_hint(date(2026, 10, 25)) == "Sat Oct 31, evening"
+    assert web.next_saturday_hint(date(2026, 11, 1)) == "Sat Nov 7, evening"
+    t = env.browser().get("/").text          # app clock is 2026-10-21, a Wednesday
+    assert t.count('placeholder="Sat Oct 24, evening"') == 2
+    assert "Sat Nov 8, evening" not in t
+
+
+def test_budget_commas(env):
+    assert web.parse_budget("1,000") == 100000
+    assert web.parse_budget("40.50") == 4050
+    assert web.budget_error("1,000") is None
+    assert web.budget_error("40.50") is None
+    assert web.budget_error("40") is None
+    assert web.budget_error("") is None
+    assert web.budget_error("40,5") == "Use a dot for cents, like 40.50."
+    assert web.budget_error("40,50") == "Use a dot for cents, like 40.50."
+    c = env.browser()
+    pid = new_plan(c)
+    for bad in ("40,5", "40,50"):
+        r = card(c, pid, budget=bad, expect=400)
+        assert "Use a dot for cents, like 40.50." in r.text
+    card(c, pid, budget="1,000")
+    assert env.store.cards(pid)[0].max_budget_minor == 100000
+
+
+def test_solo_stranger_sees_ownership_copy(env):
+    host = env.browser()
+    pid = new_solo(host)
+    stranger = env.browser()
+    for r in (stranger.get(f"/p/{pid}/card"),
+              stranger.post(f"/p/{pid}/card", data={"name": "Eve", "budget": "40"})):
+        assert r.status_code == 409
+        plain = re.sub(r"<[^>]+>", "", r.text)
+        assert "This 1-player plan belongs to another browser. Start your own from the home page." in plain
+        assert re.search(r'<a href="/">Start your own from the home page\.</a>', r.text)
+        assert "already has its one card" not in r.text
+        assert not solo_words(r.text), r.text
+    # once the one card exists, the real full line is kept
+    card(host, pid, "Ann", "50")
+    r = stranger.get(f"/p/{pid}/card")
+    assert "This plan already has its one card, so it is full." in r.text
+    assert "belongs to another browser" not in r.text and not solo_words(r.text)
+
+
+def test_unknown_path_is_friendly_404(env):
+    c = env.browser()
+    r = c.get("/nonexistent")
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("text/html")
+    assert "Page not found" in r.text
+    assert "There is nothing at this address. Start a new plan from the home page." in r.text
+    assert 'class="brand"' in r.text and 'class="topbar-link"' in r.text
+    assert "Content-Security-Policy" in r.headers and r.headers["X-Content-Type-Options"] == "nosniff"
+    assert c.get("/admin/whatever").status_code == 404
+    assert c.get("/admin/carts.csv").status_code == 404
+    assert c.get("/_probe/whoami").status_code == 404
+    assert c.get("/p/missing0000000000").status_code == 410
+    assert c.get("/static/nope.css").status_code == 404
+    assert c.post("/healthz").status_code == 405

@@ -16,11 +16,14 @@ import tempfile
 import threading
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import RedirectResponse, Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import demo as demo_data
 from . import limits
@@ -125,6 +128,7 @@ def register(app, templates, deps: Deps):
     app.add_exception_handler(PlanNotFound, _plan_gone)
     app.add_exception_handler(KvError, _store_down)
     app.add_exception_handler(StorageMissing, _storage_missing)
+    app.add_exception_handler(StarletteHTTPException, _http_error)
     app.middleware("http")(_housekeeping)
     app.include_router(router)
 
@@ -150,6 +154,14 @@ def render(request, name, status=200, **ctx):
 
 async def _page_error(request, exc: PageError):
     return render(request, exc.template, exc.status, **exc.ctx)
+
+
+async def _http_error(request, exc):
+    """A friendly page with site chrome for 404; every other status keeps FastAPI's default response."""
+    if exc.status_code == 404:
+        return render(request, "error.html", 404, title="Page not found",
+                      message="There is nothing at this address. Start a new plan from the home page.")
+    return await http_exception_handler(request, exc)
 
 
 async def _plan_gone(request, exc):
@@ -308,6 +320,14 @@ def share_url(request, plan_id) -> str:
     return "%s://%s/p/%s" % (proto, host, plan_id)
 
 
+def budget_error(text) -> str | None:
+    """A comma that is not a thousands separator (not followed by exactly three digits) is a likely decimal
+    comma; say so instead of reading "40,5" as 405 dollars."""
+    if re.search(r",(?!\d{3}(?!\d))", text or ""):
+        return "Use a dot for cents, like 40.50."
+    return None
+
+
 def parse_budget(text) -> int | None:
     t = (text or "").strip().lstrip("$").replace(",", "")
     try:
@@ -359,15 +379,31 @@ def _city_and_date(form: dict):
     return city, date_text, None
 
 
+FAVICON_PATH = Path(__file__).resolve().parent.parent / "static" / "favicon.png"
+
+
+@router.get("/favicon.ico")
+def favicon():
+    return Response(FAVICON_PATH.read_bytes(), media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+def next_saturday_hint(today: date) -> str:
+    """"Sat Oct 24, evening": the next Saturday strictly after today, as a form placeholder."""
+    d = today + timedelta(days=(5 - today.weekday()) % 7 or 7)
+    return "Sat %s %d, evening" % (d.strftime("%b"), d.day)
+
+
 @router.get("/")
-def home(request: Request):
+def home(request: Request, deps: Deps = Depends(get_deps)):
     values = _plan_form_values({})
     wanted = (request.query_params.get("city") or "").strip()[:CITY_MAX]
     if wanted in CITIES:
         values["city"] = wanted
     elif wanted:
         values["city"], values["other_city"] = "other", wanted
-    return render(request, "new_plan.html", cities=CITIES, values=values, error=None)
+    return render(request, "new_plan.html", cities=CITIES, values=values, error=None,
+                  date_hint=next_saturday_hint(deps.now().date()))
 
 
 def _admit(request: Request, deps: Deps):
@@ -394,7 +430,8 @@ def create_plan(request: Request, form: dict = Depends(read_form), deps: Deps = 
     values = _plan_form_values(form)
 
     def bad(message):
-        return render(request, "new_plan.html", 400, cities=CITIES, values=values, error=message)
+        return render(request, "new_plan.html", 400, cities=CITIES, values=values, error=message,
+                      date_hint=next_saturday_hint(now.date()))
 
     city, date_text, problem = _city_and_date(form)
     if problem:
@@ -423,7 +460,8 @@ def create_solo(request: Request, form: dict = Depends(read_form), deps: Deps = 
         return refused
     city, date_text, problem = _city_and_date(form)
     if problem:
-        return render(request, "new_plan.html", 400, cities=CITIES, values=_plan_form_values(form), error=problem)
+        return render(request, "new_plan.html", 400, cities=CITIES, values=_plan_form_values(form), error=problem,
+                      date_hint=next_saturday_hint(now.date()))
     token = secrets.token_urlsafe(24)
     plan_id = deps.store.create_plan({
         "city": city, "date_text": date_text, "group_size": 1,
@@ -529,7 +567,8 @@ def _card_page(request, deps, plan_id, plan, cards, status=200, values=None, err
     host = is_host(request, plan_id, plan)
     full = me is None and (lost_seat or len(cards) >= plan["group_size"] or (solo and not host))
     return render(request, "card.html", status if not full else 409, plan_id=plan_id, plan=plan, me=me,
-                  full=full, values=values or _card_values(me), error=error,
+                  full=full, seat_open=len(cards) < plan["group_size"], values=values or _card_values(me),
+                  error=error,
                   saved=request.query_params.get("saved") == "1",
                   relax_words=_relax_offer(deps.store, plan_id, me), solo=solo,
                   host=host, runs=deps.store.argue_count(plan_id),
@@ -557,6 +596,9 @@ def save_card(plan_id: str, request: Request, form: dict = Depends(read_form),
     budget = parse_budget(values["budget"])
     if not values["name"].strip():
         return _card_page(request, deps, plan_id, plan, cards, 400, values, "Add your name.")
+    comma_problem = budget_error(values["budget"])
+    if comma_problem:
+        return _card_page(request, deps, plan_id, plan, cards, 400, values, comma_problem)
     if budget is None:
         return _card_page(request, deps, plan_id, plan, cards, 400, values,
                           "Budget must be a dollar amount from 1 to 100000.")

@@ -33,12 +33,15 @@ header.site .bar {
 .brand {
   font-family: var(--mono); font-weight: 700; text-transform: uppercase; letter-spacing: 0.18em;
   color: var(--green); text-decoration: none; font-size: 1.05rem; text-shadow: 2px 2px 0 var(--green-deep);
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 .5rem;
 }
-.topbar-link { font-family: var(--mono); font-size: 0.85rem; color: var(--neon); }
+.topbar-link { font-family: var(--mono); font-size: 0.85rem; color: var(--neon);
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 .5rem; }
 footer.site { border-top: 3px solid var(--green-deep); padding: 0.9rem 1rem 1.4rem; text-align: center;
   font-size: 0.9rem; color: var(--muted); }
 footer.site p { margin: 0.2rem 0; }
-.footlinks a { margin: 0 0.6rem; font-family: var(--mono); }
+.footlinks a { margin: 0 0.3rem; font-family: var(--mono);
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 .5rem; }
 
 /* type */
 h1, h2, h3, h4 { font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.06em; line-height: 1.25; }
@@ -89,7 +92,11 @@ dl.facts dd { margin: 0; }
 .mode { border: 3px solid var(--green); background: var(--panel); padding: 0.25rem 1rem 1rem; }
 .mode.versus { border-color: var(--neon); background: var(--panel-hi); }
 .mode h2 { margin-top: 0.9rem; text-align: center; font-size: 1.3rem; }
-.demo { border-top: 2px dashed var(--line); margin-top: 1.25rem; }
+.demo { border: 2px dashed var(--line); margin: 1rem 0; padding: 0.25rem 0.75rem 0.5rem; }
+.demo h2 { margin-top: 0.5rem; font-size: 1rem; }
+form.strip { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+form.strip label { margin: 0; }
+form.strip select, form.strip button { width: auto; flex: 1 1 10rem; margin-top: 0; }
 
 /* the fight: scoreboard, rounds, energy bars */
 .arena { border: 3px solid var(--green); background: var(--panel); padding: 0.6rem 0.75rem; margin: 0.5rem 0; }

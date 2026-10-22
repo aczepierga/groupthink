@@ -65,21 +65,44 @@ def chunk(kind, data):
     return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
 
 
-def png_bytes(pixels):
+def png_bytes(pixels, size=SIZE):
     raw = bytearray()
-    for y in range(SIZE):
+    for y in range(size):
         raw.append(0)
-        for r, g, b in pixels[y * SIZE:(y + 1) * SIZE]:
+        for r, g, b in pixels[y * size:(y + 1) * size]:
             raw += bytes((r, g, b))
-    header = struct.pack(">IIBBBBB", SIZE, SIZE, 8, 2, 0, 0, 0)
+    header = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
             + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
+FAVICON_SIZE = 32
+FAVICON_CELL = 4
+
+
+def make_favicon(path):
+    """Writes a 32x32 PNG: dark ground, a green G from the 5x7 font at 4px cells, centred."""
+    size, cell = FAVICON_SIZE, FAVICON_CELL
+    pixels = [BG] * (size * size)
+    left, top = (size - 5 * cell) // 2, (size - 7 * cell) // 2
+    for r, row in enumerate(FONT["G"]):
+        for c, ch in enumerate(row):
+            if ch == "1":
+                for y in range(top + r * cell, top + (r + 1) * cell):
+                    for x in range(left + c * cell, left + (c + 1) * cell):
+                        pixels[y * size + x] = GREEN
+    path = Path(path)
+    path.write_bytes(png_bytes(pixels, size))
+    return path
+
+
 def main():
-    out = Path(__file__).resolve().parent.parent / "static" / "logo.png"
+    static = Path(__file__).resolve().parent.parent / "static"
+    out = static / "logo.png"
     out.write_bytes(png_bytes(build()))
     print("wrote", out, out.stat().st_size, "bytes")
+    fav = make_favicon(static / "favicon.png")
+    print("wrote", fav, fav.stat().st_size, "bytes")
 
 
 if __name__ == "__main__":

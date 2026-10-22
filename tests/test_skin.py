@@ -110,6 +110,7 @@ def test_home_has_two_modes_and_demo(all_pages):
     assert re.search(r'<form[^>]*action="/solo"', t)
     assert re.search(r'<form[^>]*action="/plans"', t)
     assert re.search(r'<form[^>]*action="/demo"', t)
+    assert re.search(r'<form[^>]*action="/demo"', t).start() < re.search(r'<form[^>]*action="/solo"', t).start()
     ids = re.findall(r'\bid="([^"]*)"', t)
     assert len(ids) == len(set(ids)), [i for i in ids if ids.count(i) > 1]
     for name, page in all_pages.items():

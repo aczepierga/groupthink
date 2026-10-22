@@ -9,6 +9,19 @@
 {% include "_copy.html" %}
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 
+<section class="demo" aria-labelledby="demo-h">
+  <h2 id="demo-h">Just looking? Watch a demo fight with sample friends</h2>
+  <form method="post" action="/demo" class="strip">
+    <label for="demo-city">City</label>
+    <select id="demo-city" name="city">
+      {% for c in cities %}<option value="{{ c }}"{% if c == "Chicago" %} selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="secondary">Try it with sample friends</button>
+  </form>
+  <p class="muted">Two sample people join you, clearly labelled. The offers are real and live.</p>
+</section>
+
 <div class="modes">
 <section class="mode solo" aria-labelledby="solo-h">
   <h2 id="solo-h">1 PLAYER</h2>
@@ -22,7 +35,7 @@
     <label for="solo-other_city">Other city (only if you picked "Other US city")</label>
     <input id="solo-other_city" name="other_city" type="text" maxlength="60" value="{{ values.other_city }}" autocomplete="off">
     <label for="solo-date_text">When</label>
-    <input id="solo-date_text" name="date_text" type="text" maxlength="60" required placeholder="Sat Nov 8, evening" value="{{ values.date_text }}">
+    <input id="solo-date_text" name="date_text" type="text" maxlength="60" required placeholder="{{ date_hint }}" value="{{ values.date_text }}">
     <label for="solo-theme">Theme or vibe (optional)</label>
     <input id="solo-theme" name="theme" type="text" maxlength="80" placeholder="date night, pottery, tacos" value="{{ values.theme }}">
     <button type="submit">INSERT COIN: 1 PLAYER</button>
@@ -41,7 +54,7 @@
   <label for="group-other_city">Other city (only if you picked "Other US city")</label>
   <input id="group-other_city" name="other_city" type="text" maxlength="60" value="{{ values.other_city }}" autocomplete="off">
   <label for="group-date_text">When</label>
-  <input id="group-date_text" name="date_text" type="text" maxlength="60" required placeholder="Sat Nov 8, evening" value="{{ values.date_text }}">
+  <input id="group-date_text" name="date_text" type="text" maxlength="60" required placeholder="{{ date_hint }}" value="{{ values.date_text }}">
   <label for="group-group_size">How many people (2 to 6)</label>
   <input id="group-group_size" name="group_size" type="number" inputmode="numeric" min="2" max="6" required value="{{ values.group_size }}">
   <label for="group-theme">Theme or vibe (optional)</label>
@@ -51,17 +64,5 @@
 </section>
 </div>
 
-<section class="demo" aria-labelledby="demo-h">
-  <h2 id="demo-h">Just looking?</h2>
-  <p class="muted">See a full argument on your own. Two sample people join you, clearly labelled. The offers are real and live.</p>
-  <form method="post" action="/demo" class="stack">
-    <label for="demo-city">City</label>
-    <select id="demo-city" name="city">
-      {% for c in cities %}<option value="{{ c }}"{% if c == "Chicago" %} selected{% endif %}>{{ c }}</option>
-      {% endfor %}
-    </select>
-    <button type="submit" class="secondary">Try it with sample friends</button>
-  </form>
-</section>
 <p class="muted">No sign-in. Group plans give you a link to share. Plans and cards are deleted after 14 days.</p>
 {% endblock %}

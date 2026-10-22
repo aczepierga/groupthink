@@ -5,7 +5,8 @@
 {% if not solo %}<p><a href="/p/{{ plan_id }}">Back to the plan</a></p>
 {% elif runs > 0 %}<p><a href="/p/{{ plan_id }}/argue">Back to the picks</a></p>{% endif %}
 {% if full %}
-  {% if solo %}<p class="error" role="alert">This plan already has its one card, so it is full.</p>
+  {% if solo and not host and seat_open %}<p class="error" role="alert">This 1-player plan belongs to another browser. <a href="/">Start your own from the home page.</a></p>
+  {% elif solo %}<p class="error" role="alert">This plan already has its one card, so it is full.</p>
   {% else %}<p class="error" role="alert">This plan already has all {{ plan.group_size }} cards, so it is full.</p>{% endif %}
 {% else %}
   {% if solo %}<p>Private: only you see this card. Your two voices argue in general terms ("over my budget") unless you tick "say my numbers".</p>
