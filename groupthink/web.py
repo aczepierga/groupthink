@@ -947,7 +947,7 @@ def vote(plan_id: str, request: Request, form: dict = Depends(read_form), deps: 
     if form["product_id"] in store.not_cartable_ids(deps.now()):
         raise refuse(400, NOT_CARTABLE_REFUSAL, "Bad request")
     store.put_vote(plan_id, me.id, form["product_id"])
-    return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
+    return RedirectResponse("/p/%s/argue?seen=1#results" % plan_id, status_code=303)
 
 
 @router.post("/p/{plan_id}/pick")
@@ -965,12 +965,12 @@ def pick(plan_id: str, request: Request, form: dict = Depends(read_form), deps: 
         if form.get("product_id") not in {r.candidate.product_id for r in got[1].top}:
             raise refuse(400, "That is not one of your options.", "Bad request")
         store.set_pick(plan_id, form["product_id"])
-        return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
+        return RedirectResponse("/p/%s/argue?seen=1#results" % plan_id, status_code=303)
     tal = tally(got[1].top, store.votes(plan_id), None, blocked=blocked)
     if not tal["pickable"] or form.get("product_id") not in tal["leaders"]:
         raise refuse(400, "The host only breaks ties, and only between the tied options.", "Bad request")
     store.set_pick(plan_id, form["product_id"])
-    return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
+    return RedirectResponse("/p/%s/argue?seen=1#results" % plan_id, status_code=303)
 
 
 # ---- cart and order evidence ----------------------------------------------------------------------

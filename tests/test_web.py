@@ -805,7 +805,7 @@ def test_vote_requires_member_and_known_option(env):
     assert env.browser().post(f"/p/{pid}/vote", data={"product_id": "p1"}).status_code == 403
     assert members[0].post(f"/p/{pid}/vote", data={"product_id": "zzz"}).status_code == 400
     r = members[0].post(f"/p/{pid}/vote", data={"product_id": "p1"}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == f"/p/{pid}/argue"
+    assert r.status_code == 303 and r.headers["location"] == f"/p/{pid}/argue?seen=1#results"
     assert env.store.votes(pid) == {"p1": 1}
     members[0].post(f"/p/{pid}/vote", data={"product_id": "p2"})     # a member's vote can change
     assert env.store.votes(pid) == {"p2": 1}
@@ -1774,3 +1774,35 @@ def test_no_likes_matched_note():
     t = c.get(f"/p/{pid}/argue").text
     assert "None of the offers found matched your likes, so these are the closest." in t
     no_group_words(t)
+
+
+# ---- no debate replay after voting, picking or reloading -----------------------------------------------
+
+def test_vote_and_pick_return_to_results_without_replay(env):
+    pid, host, members = group(env)
+    argue(host, pid)
+    ranked = top_product_ids(env, pid)
+    a, b = ranked[0], ranked[1]
+    seen = f"/p/{pid}/argue?seen=1#results"
+    r = members[0].post(f"/p/{pid}/vote", data={"product_id": a}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == seen
+    members[1].post(f"/p/{pid}/vote", data={"product_id": b})
+    r = host.post(f"/p/{pid}/pick", data={"product_id": b}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == seen
+    sc = env.browser()
+    spid = new_solo(sc)
+    card(sc, spid, "Ann", "50")
+    argue(sc, spid)
+    ids = top_product_ids(env, spid)
+    r = sc.post(f"/p/{spid}/pick", data={"product_id": ids[0]}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/p/{spid}/argue?seen=1#results"
+    # the argue POST itself still lands on the plain page, so a fresh run is animated
+    assert argue(host, pid).headers["location"] == f"/p/{pid}/argue"
+
+
+def test_debate_carries_run_number(env):
+    pid, host, members = group(env)
+    argue(host, pid)
+    assert re.search(r'<ol id="debate"[^>]*data-run="1"', host.get(f"/p/{pid}/argue").text)
+    argue(host, pid)
+    assert re.search(r'<ol id="debate"[^>]*data-run="2"', host.get(f"/p/{pid}/argue").text)

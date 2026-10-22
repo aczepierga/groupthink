@@ -117,6 +117,28 @@
   function showResults() {
     if (results) { results.classList.remove("pending"); }
     if (skip) { skip.hidden = true; }
+    markSeen();
+  }
+
+  // A debate is animated once per run per tab. Voting, picking and reloading come back with ?seen=1 or
+  // find the sessionStorage key, and go straight to the results. Storage can be blocked: every access is
+  // inside try/catch and a failure just means the reveal plays again.
+  var seenKey = "gt-seen:" + location.pathname + ":" + (out ? out.getAttribute("data-run") : "");
+
+  function markSeen() {
+    try { window.sessionStorage.setItem(seenKey, "1"); } catch (e) { /* storage blocked: replay is harmless */ }
+  }
+
+  function alreadySeen() {
+    if (/(^|[?&])seen=1(&|$)/.test(location.search)) { return true; }
+    try { return window.sessionStorage.getItem(seenKey) !== null; } catch (e) { return false; }
+  }
+
+  // After a reveal on a #results URL the rows have grown the page, so bring the results back into view.
+  function landOnResults() {
+    try {
+      if (location.hash === "#results" && results && results.scrollIntoView) { results.scrollIntoView(); }
+    } catch (e) { /* scrolling is a nicety */ }
   }
 
   if (tpl && out && tpl.content && results) {
@@ -132,6 +154,7 @@
         } finally {
           showResults();
         }
+        landOnResults();
       };
 
       var next = function () {
@@ -150,7 +173,7 @@
       };
 
       try { buildArena(rows); } catch (e) { if (arena) { arena.hidden = true; } }
-      if (reduced) {
+      if (reduced || alreadySeen()) {
         finish();
       } else {
         results.classList.add("pending");

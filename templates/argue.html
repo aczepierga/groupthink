@@ -7,7 +7,7 @@
 <section aria-labelledby="debate-h">
   <h2 id="debate-h">What the bots say</h2>
   <div id="arena" class="arena" data-rounds="{{ rounds }}" hidden></div>
-  <ol id="debate" class="debate" aria-live="polite"></ol>
+  <ol id="debate" class="debate" aria-live="polite" data-run="{{ runs }}"></ol>
   <template id="debate-lines">
     {% for ln in lines %}<li class="line {{ ln.kind }}" data-round="{{ ln.round }}"{% if ln.product_id %} data-product="{{ ln.product_id }}"{% endif %}><span class="who">{{ ln.speaker }}</span><span class="say">{{ ln.text }}</span>{% if ln.kind == "referee" %}<span class="ko">K.O.</span>{% endif %}</li>
     {% endfor %}

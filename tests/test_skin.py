@@ -182,3 +182,9 @@ def test_round_numbers_follow_the_debate_shape():
     one_round = [ln("Scout", "scout"), ln("A", "advocate"), ln("Referee", "referee")]
     assert _round_numbers(one_round) == [1, 2, 3]
     assert _round_count([]) == 1
+
+
+def test_reveal_script_skips_when_seen():
+    js = (ROOT / "static" / "reveal.js").read_text()
+    assert "seen=1" in js and "sessionStorage" in js and "gt-seen:" in js and "data-run" in js
+    assert "try {" in js and "catch" in js

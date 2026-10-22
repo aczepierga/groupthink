@@ -778,7 +778,7 @@ def test_solo_pick_another_then_cart():
     pid, c, ids = solo_run(env)
     assert len(ids) >= 2
     r = c.post(f"/p/{pid}/pick", data={"product_id": ids[1]}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == f"/p/{pid}/argue"
+    assert r.status_code == 303 and r.headers["location"] == f"/p/{pid}/argue?seen=1#results"
     page = c.get(f"/p/{pid}/argue").text
     assert re.search(r'data-winner="%s"' % re.escape(ids[1]), page)
     r = get_cart_link(c, pid)
