@@ -607,20 +607,17 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         result.away_dropped = found.away_dropped
         result.partner_empty = found.partner_empty
         result.search_cap_minor = max(m.max_budget_minor for m in members)
+        # an empty search costs no run (up to MAX_REFUNDS per plan). Claimed before the single save so the
+        # stored result already says so; the run itself is only released once the save has succeeded.
+        refund = (not result.shortlist) and store.claim_refund(plan_id, MAX_REFUNDS)
+        result.refunded = refund
         lines = run_debate(result, members, _seed(plan_id, run - 1), deps.now().date(), mode=plan_mode(plan))
         store.save_result(plan_id, lines, result)
     except Exception:
         store.release_run(plan_id)
         raise
-    if not result.shortlist and store.claim_refund(plan_id, MAX_REFUNDS):
-        # an empty search costs no run (up to MAX_REFUNDS per plan); the result is already saved, so a failure
-        # below cannot lose it. Re-save only to record that the run was given back, for the page note.
+    if refund:
         store.release_run(plan_id)
-        result.refunded = True
-        try:
-            store.save_result(plan_id, lines, result)
-        except Exception as exc:
-            log.warning("refund note not saved: %s", type(exc).__name__)
     return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
 
 

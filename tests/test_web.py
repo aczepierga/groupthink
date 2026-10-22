@@ -720,6 +720,32 @@ def solo_words(page):
     return SOLO_WORDS.search(body)
 
 
+def test_refunded_empty_run_saves_exactly_once():
+    env = Env(ls=FakeLs(hits=[]))
+    pid, host = cap_group(env)
+    real, calls = env.store.save_result, []
+
+    def spy(*a, **kw):
+        calls.append(a)
+        return real(*a, **kw)
+    env.store.save_result = spy
+    argue(host, pid)
+    assert len(calls) == 1
+    assert env.store.argue_count(pid) == 0 and env.store.get_result(pid)[1].refunded is True
+
+
+def test_failed_save_on_an_empty_run_releases_the_run():
+    env = Env(ls=FakeLs(hits=[]))
+    pid, host = cap_group(env)
+
+    def boom(*a, **kw):
+        raise RuntimeError("kv down")
+    env.store.save_result = boom
+    with pytest.raises(RuntimeError):
+        host.post(f"/p/{pid}/argue", follow_redirects=False)
+    assert env.store.argue_count(pid) == 0 and env.store.get_result(pid) is None
+
+
 def test_solo_budget_cap_copy():
     env = Env(ls=FakeLs(hits=[]))
     host = env.browser()
