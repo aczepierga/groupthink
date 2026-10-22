@@ -280,9 +280,9 @@ REFEREE_EMPTY = {
         "Most offers do not have enough vouchers for everyone, so none are left. Try another city or theme.",
     ],
     "away": [
-        "Live search found offers, but none in your area. Start a new plan in a nearby city, or try another theme.",
-        "Nothing I found is in or near your city. Start a new plan in a nearby city, or try another theme.",
-        "Every offer was too far away. Start a new plan in a nearby city, or try another theme.",
+        "Live search found offers, but none in your area. Start a new plan in a nearby city or with a new theme.",
+        "Nothing I found is in or near your city. Start a new plan in a nearby city or with a new theme.",
+        "Every offer was too far away. Start a new plan in a nearby city or with a new theme.",
     ],
     "date": [
         "Every offer left is tied to a different date than your plan. Try another date or theme.",
@@ -422,9 +422,9 @@ SOLO_REFEREE_EMPTY = {
         "Most offers do not have enough vouchers for you, so none are left. Try another city or theme.",
     ],
     "away": [
-        "Live search found offers, but none in your area. Start a new plan in a nearby city, or try another theme.",
-        "Nothing I found is in or near your city. Start a new plan in a nearby city, or try another theme.",
-        "Every offer was too far away. Start a new plan in a nearby city, or try another theme.",
+        "Live search found offers, but none in your area. Start a new plan in a nearby city or with a new theme.",
+        "Nothing I found is in or near your city. Start a new plan in a nearby city or with a new theme.",
+        "Every offer was too far away. Start a new plan in a nearby city or with a new theme.",
     ],
     "date": [
         "Every offer left is tied to a different date than your plan. Try another date or theme.",
