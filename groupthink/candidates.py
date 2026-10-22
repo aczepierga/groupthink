@@ -56,7 +56,9 @@ _NUM_WORDS = {w: i for i, w in enumerate(
 _NUM = r"(\d{1,3}|" + "|".join(_NUM_WORDS) + r")(?!\d)"
 _PEOPLE_RX = re.compile(r"(?<![\w$])(?:for|up to)\s+(?:up to\s+)?" + _NUM +
                         r"\s+(?:people|persons|guests|players|adults|riders|diners)\b", re.IGNORECASE)
-_FOR_RX = re.compile(r"(?<![\w$])for\s+" + _NUM + r"(?=\s*(?:$|[(,)\-|]))", re.IGNORECASE)
+_UNITS = "hour|day|month|week|night|minute|class|session|visit|lesson|round|year"
+_FOR_RX = re.compile(r"(?<![\w$])for\s+" + _NUM + r"(?!\s*-?\s*(?:" + _UNITS + r")(?:e?s)?\b)(?=\s*(?:$|[(,)\-|]))", re.IGNORECASE)
+_UPTO_RX = re.compile(r"(?<!\w)up to\s+" + _NUM, re.IGNORECASE)
 _FOR_NUMBER_RX = re.compile(r"(?<!\w)for\s+\$?(?:\d|" + "|".join(_NUM_WORDS) + r")", re.IGNORECASE)
 _MORE_SIZES_RX = re.compile(r"\s*(?:,\s*(?:or\s+|and\s+)?|\s+or\s+)(?:\d|" + "|".join(_NUM_WORDS) + r")\b",
                             re.IGNORECASE)
@@ -71,27 +73,36 @@ def _party_in(text: str) -> tuple[bool, int | None]:
     """(text names a people count, the count or None when it is ambiguous or out of range)."""
     sizes: set[int] = set()
     found = False
+    spans: list[tuple[int, int]] = []
     for rx in (_PEOPLE_RX, _FOR_RX):
         for m in rx.finditer(text):
             n = _party_n(m.group(1))
             if n is None:
                 continue
             found = True
+            spans.append((m.start(), m.end()))
             if _MORE_SIZES_RX.match(text, m.end()):
                 return True, None
             sizes.add(n)
+    if found:   # a bare "(Up to 4)" next to a "for 2" is a second size
+        for m in _UPTO_RX.finditer(text):
+            n = _party_n(m.group(1))
+            if n is not None and not any(a <= m.start() < b for a, b in spans):
+                sizes.add(n)
     return found, (next(iter(sizes)) if len(sizes) == 1 else None)
 
 
-def title_party(option_title: str, title: str) -> int | None:
+def title_party(option_title, title) -> int | None:
     """People one voucher covers, read from the option title first, then the title. A count that is not a
     people count (hours, months, a price, a list of sizes) reads as unknown, never as a guess."""
-    found, n = _party_in(option_title or "")
+    option_title = option_title if isinstance(option_title, str) else ""
+    title = title if isinstance(title, str) else ""
+    found, n = _party_in(option_title)
     if found:
         return n
-    if _FOR_NUMBER_RX.search(option_title or ""):
+    if _FOR_NUMBER_RX.search(option_title):
         return None
-    return _party_in(title or "")[1]
+    return _party_in(title)[1]
 
 
 def _minor(v) -> int | None:

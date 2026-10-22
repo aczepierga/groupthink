@@ -320,3 +320,15 @@ def test_title_party_sets_quantity_and_drops_cover_more_warning():
     c.title_party = 8
     r = rank([c], group(3)).shortlist[0]
     assert r.quantity == 1 and "may_cover_more" not in r.warnings
+
+
+def test_fixed_date_comma_time_is_not_a_second_day():
+    assert fixed_date("Sat Oct 24, 7pm", TODAY) == "2026-10-24"
+    assert fixed_date("Nov 7, 8pm", TODAY) == "2026-11-07"
+    assert fixed_date("Nov 7, 8 PM", TODAY) == "2026-11-07"
+    assert fixed_date("Nov 7, 8", TODAY) is None
+    assert fixed_date("Nov 7/8 show", TODAY) is None
+    c = cand(title="Show", pid="x")
+    c.option_title = "Oct 23, 7pm Show"
+    from groupthink.fit import offer_fixed_date
+    assert offer_fixed_date(c, TODAY) == "2026-10-23"

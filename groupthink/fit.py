@@ -142,7 +142,7 @@ _MONTH_DAY_RX = re.compile(
     r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|"
     r"Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!\d)")
 _CUE_RX = re.compile(r"\b(to|through|thru|until|valid|and|or)\b|[-&]", re.IGNORECASE)
-_SECOND_DAY_RX = re.compile(r"\s*,\s*\d{1,2}(?!\d)")
+_SECOND_DAY_RX = re.compile(r"\s*(?:,\s*\d{1,2}(?!\d)(?!\s*(?::|[ap]\.?m\b))|/)", re.IGNORECASE)
 _MONTH_NUM = {m: i for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split(), start=1)}
 PAST_GRACE_DAYS = 60
 

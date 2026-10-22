@@ -182,3 +182,27 @@ def test_title_party_ignores_non_people_counts():
                  "Wine Flight for 2 or 4", "Party for 40 People"):
         assert title_party("", text) is None, text
     assert title_party("Distillery Tour for 4 plus $10 token", "Distillery Tour for 2, 4, or 6") is None
+
+
+def test_title_party_rejects_durations_with_singular_or_hyphenated_units():
+    for text in ("Membership for 3-Day Pass", "Yoga for 3-Month Membership", "Spa for 2-Hour Session",
+                 "Pass for 10 - Classes", "Tasting for 2 (Up to 4)"):
+        assert title_party("", text) is None, text
+    assert title_party("", "Escape Room for Up to 6 People") == 6
+    assert title_party("Up to 4 Players Per Team", "") == 4
+
+
+def test_title_party_and_build_survive_non_string_titles():
+    assert title_party(5, ["x"]) is None
+    assert title_party(None, None) is None
+    h = copy.deepcopy(HITS[0])
+    h["title"] = 123
+    h["options"][0]["title"] = ["a"]
+    build_candidates([h], {}, "B")
+
+
+def test_candidate_from_dict_without_title_party_loads_none():
+    c = build_candidates(HITS, {}, "B")[0]
+    d = c.to_dict()
+    d.pop("title_party")
+    assert Candidate.from_dict(d).title_party is None

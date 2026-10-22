@@ -1531,8 +1531,14 @@ def test_offer_copy_for_title_size_and_minimum():
     t = host.get(f"/p/{pid}/argue").text
     assert "Voucher size: up to 8 people (from the offer title)." in t
     assert "Buy 1 voucher for 3 people." in t
-    assert "may already cover more than one person" not in t.split("Axe Throwing Hour")[0].split("Swing Suite for 8")[-1]
-    assert "LivingSocial sells at least 4 vouchers for this option." in t
+    blocks = re.findall(r'<article class="offer".*?</article>', t, re.S)
+    swing = next(b for b in blocks if "Swing Suite for 8" in b)
+    axe = next(b for b in blocks if "Axe Throwing Hour" in b)
+    assert "Voucher size: up to 8 people (from the offer title)." in swing
+    assert "Buy 1 voucher for 3 people." in swing
+    assert "may already cover more than one person" not in swing
+    assert "LivingSocial sells at least 4 vouchers for this option." not in swing
+    assert "LivingSocial sells at least 4 vouchers for this option." in axe
 
 
 def test_fixed_date_line_when_plan_date_is_vague():
