@@ -35,6 +35,7 @@
       <button type="submit">Start the fight</button>
     </form>
     <p class="muted">Fight {{ runs + 1 }} of {{ max_runs }}. The search takes a few seconds. It uses the card as saved below.</p>
+    {% if has_result %}<p class="muted">Running again starts a new fight and clears your switch.</p>{% endif %}
     {% endif %}
   </section>
   {% endif %}

@@ -11,6 +11,7 @@ deadline. purge_expired is a no-op: Redis does the deleting. Raw IPs never reach
   gt:cards:<id>                  member_id -> JSON Member     hash
   gt:result:<id>                 JSON {"lines", "result"}     string
   gt:argues:<id>                 /argue runs claimed          counter (claim_run INCRs, release_run DECRs)
+  gt:refunds:<id>                empty-search refunds spent   counter (claim_refund INCRs, never released)
   gt:votes:<id>                  member_id -> product_id      hash
   gt:pick:<id>                   product_id                   string
   gt:carts:<id>:<option_id>      cart ids, append order       list
@@ -123,6 +124,16 @@ class DurableStore:
         key = P + "argues:" + plan_id
         if int(self.kv.decr(key)) < 0:
             self.kv.incr(key)
+
+    def claim_refund(self, plan_id, cap):
+        """INCR the refund counter (with the plan deadline); over `cap` it is DECRed back and False is
+        returned, so of N racing claims exactly the first `cap` succeed. Refunds are never given back."""
+        key = P + "refunds:" + plan_id
+        n = int(self._write(plan_id, [["INCR", key]], [key])[0])
+        if n > cap:
+            self.kv.decr(key)
+            return False
+        return True
 
     # -- votes / pick --
     def put_vote(self, plan_id, member_id, product_id):

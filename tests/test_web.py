@@ -579,8 +579,8 @@ def test_relax_hard_no_needs_owning_member():
     r = bo.post(f"/p/{pid}/relax", data=form)
     assert r.status_code == 200
     assert env.store.cards(pid)[1].hard_nos == ["mimes"]
-    assert env.store.argue_count(pid) == 1          # dropping does not re-run on its own
-    argue(host, pid)                                 # the host runs again, run 2 of 2
+    assert env.store.argue_count(pid) == 0          # dropping does not re-run; the empty run was given back
+    argue(host, pid)                                 # the host runs again
     assert sorted(top_product_ids(env, pid)) == ["p1", "p2"]
 
 
@@ -658,6 +658,117 @@ def test_nearby_suggestion_skips_towns_already_included():
     argue(host, pid)
     t = host.get(f"/p/{pid}/argue").text
     assert "Evanston" not in t and "Oak Park" not in t
+
+
+# ---- empty searches, refunds, rerun warning ------------------------------------------------------
+
+BUDGET_CAP_COPY = "No offers came back at or under $5.00 per person in Chicago. Raise a budget or try a nearby city."
+
+
+def cap_group(env):
+    host = env.browser()
+    pid = new_plan(host, group_size="2")
+    card(host, pid, "Ann", "5")
+    b = env.browser()
+    card(b, pid, "Bo", "5")
+    return pid, host
+
+
+def test_empty_search_does_not_use_a_run():
+    env = Env(ls=FakeLs(hits=[]))
+    pid, host = cap_group(env)
+    argue(host, pid)
+    assert env.store.argue_count(pid) == 0
+    r = env.store.get_result(pid)[1]
+    assert r.search_cap_minor == 500
+    t = host.get(f"/p/{pid}/argue").text
+    assert BUDGET_CAP_COPY in t
+    assert "This search did not use up a run." in t
+    assert "Naperville" in t
+    assert "No offers were found" not in t
+
+
+def test_refunds_stop_at_the_cap():
+    env = Env(ls=FakeLs(hits=[]))
+    pid, host = cap_group(env)
+    counts = []
+    for _ in range(4):
+        argue(host, pid)
+        counts.append(env.store.argue_count(pid))
+    assert counts == [0, 0, 1, 2]
+    argue(host, pid, expect=429)
+    assert env.store.argue_count(pid) == 2
+
+
+def test_refund_note_absent_once_the_cap_is_spent():
+    env = Env(ls=FakeLs(hits=[]))
+    pid, host = cap_group(env)
+    for _ in range(3):
+        argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert BUDGET_CAP_COPY in t
+    assert "This search did not use up a run." not in t
+
+
+SOLO_WORDS = re.compile(r"group|everyone|vote|\bhost\b|someone")
+
+
+def solo_words(page):
+    body = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", page, flags=re.S)
+    body = re.sub(r"<[^>]+>", " ", body)
+    body = body.replace("GroupThink", "").replace("Groupon", "").replace("groupon", "").lower()
+    return SOLO_WORDS.search(body)
+
+
+def test_solo_budget_cap_copy():
+    env = Env(ls=FakeLs(hits=[]))
+    host = env.browser()
+    pid = new_solo(host)
+    card(host, pid, "Ann", "5")
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "No offers came back at or under $5.00 in Chicago. Raise your budget or try a nearby city." in t
+    assert "This search did not use up a run." in t
+    assert not solo_words(t), solo_words(t)
+
+
+def test_hard_no_empty_run_is_given_back():
+    env = Env()
+    pid, host, _ = group(env, hard_nos="pottery, axe, escape")
+    argue(host, pid)
+    r = env.store.get_result(pid)[1]
+    assert not r.shortlist and (r.emptied_by or "").startswith("hard_no:")
+    assert env.store.argue_count(pid) == 0
+
+
+def test_rerun_warning_shown_after_first_run():
+    env = Env()
+    pid, host, _ = group(env)
+    before = host.get(f"/p/{pid}").text
+    assert "Running again starts a new debate and clears every vote cast so far." not in before
+    argue(host, pid)
+    after = host.get(f"/p/{pid}").text
+    assert "Running again starts a new debate and clears every vote cast so far." in after
+
+
+def test_rerun_warning_shown_after_a_refunded_run():
+    env = Env(ls=FakeLs(hits=[]))
+    pid, host = cap_group(env)
+    argue(host, pid)
+    assert env.store.argue_count(pid) == 0
+    assert "Running again starts a new debate" in host.get(f"/p/{pid}").text
+
+
+def test_rerun_warning_solo():
+    env = Env()
+    host = env.browser()
+    pid = new_solo(host)
+    card(host, pid, "Ann", "50")
+    assert "Running again starts a new fight and clears your switch." not in host.get(f"/p/{pid}/card").text
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/card").text
+    assert "Running again starts a new fight and clears your switch." in t
+    assert not solo_words(t), solo_words(t)
 
 
 # ---- votes and picks ---------------------------------------------------------------------------

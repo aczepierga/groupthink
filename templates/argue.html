@@ -43,6 +43,12 @@
       {% if empty.nearby %}Try a nearby city instead:
         {% for n in empty.nearby %}<a href="/?city={{ n|urlencode }}">{{ n }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
       {% endif %}</p>
+    {% elif empty.kind == "budget_cap" %}
+      <p><strong>No offers came back at or under {{ empty.cap }}{% if not solo %} per person{% endif %} in {{ empty.city }}. Raise {% if solo %}your budget{% else %}a budget{% endif %} or try a nearby city.</strong>
+      {% if empty.nearby %}Try a nearby city instead:
+        {% for n in empty.nearby %}<a href="/?city={{ n|urlencode }}">{{ n }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
+      {% endif %}</p>
+      {% if empty.refunded %}<p>This search did not use up a run.</p>{% endif %}
     {% elif solo and empty.kind == "budget" %}
       <p><strong>No offer fits your budget.</strong>
       {% if empty.cheapest %}The cheapest option is {{ empty.cheapest.spend }} ({{ empty.cheapest.title }}).{% endif %}</p>

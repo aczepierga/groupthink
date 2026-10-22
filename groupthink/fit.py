@@ -122,6 +122,8 @@ class RankResult:
     away_dropped: int = 0    # likewise: products with no location in the plan's area
     partner_empty: bool = False   # likewise: the Partner search returned zero products
     blocking_words: list = field(default_factory=list)   # [{"word", "member_id"}] for every fully excluded product
+    search_cap_minor: int = 0     # highest member budget the search used, per person (set by /argue)
+    refunded: bool = False        # the run was given back because the search came back empty (set by /argue)
     young_dropped: int = 0        # products left out because they are made for younger guests
     likes_matched_any: bool = True   # False when members have likes but no shortlisted option matched one
 
@@ -132,6 +134,7 @@ class RankResult:
                 "emptied_by": self.emptied_by, "adult_dropped": self.adult_dropped,
                 "away_dropped": self.away_dropped, "partner_empty": self.partner_empty,
                 "blocking_words": [dict(b) for b in self.blocking_words], "young_dropped": self.young_dropped,
+                "search_cap_minor": self.search_cap_minor, "refunded": self.refunded,
                 "likes_matched_any": self.likes_matched_any}
 
     @classmethod
@@ -143,6 +146,7 @@ class RankResult:
                    away_dropped=d.get("away_dropped", 0), partner_empty=bool(d.get("partner_empty", False)),
                    blocking_words=[dict(b) for b in d.get("blocking_words", [])],
                    young_dropped=d.get("young_dropped", 0),
+                   search_cap_minor=int(d.get("search_cap_minor", 0)), refunded=bool(d.get("refunded", False)),
                    likes_matched_any=bool(d.get("likes_matched_any", True)))
 
 

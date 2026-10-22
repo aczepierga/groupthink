@@ -40,6 +40,7 @@ log = logging.getLogger("groupthink.web")
 
 CITIES = ["Chicago", "Austin", "New York"]
 MAX_RUNS = 2
+MAX_REFUNDS = 2   # empty searches per plan that are given back instead of counting as a run
 MAX_BODY = 32 * 1024
 MIN_GROUP, MAX_GROUP = 2, 6
 DATE_MAX, THEME_MAX, CITY_MAX = 60, 80, 60
@@ -472,6 +473,7 @@ def plan_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     return render(request, "plan.html", plan_id=plan_id, plan=plan, names=[m.name for m in cards],
                   cards_in=len(cards), me=me, full=len(cards) >= plan["group_size"],
                   host=is_host(request, plan_id, plan), runs=runs, max_runs=MAX_RUNS,
+                  has_result=deps.store.get_result(plan_id) is not None,
                   share_url=share_url(request, plan_id))
 
 
@@ -531,7 +533,7 @@ def _card_page(request, deps, plan_id, plan, cards, status=200, values=None, err
                   saved=request.query_params.get("saved") == "1",
                   relax_words=_relax_offer(deps.store, plan_id, me), solo=solo,
                   host=host, runs=deps.store.argue_count(plan_id),
-                  max_runs=MAX_RUNS)
+                  has_result=deps.store.get_result(plan_id) is not None, max_runs=MAX_RUNS)
 
 
 @router.get("/p/{plan_id}/card")
@@ -604,11 +606,21 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         result.adult_dropped = found.adult_dropped
         result.away_dropped = found.away_dropped
         result.partner_empty = found.partner_empty
+        result.search_cap_minor = max(m.max_budget_minor for m in members)
         lines = run_debate(result, members, _seed(plan_id, run - 1), deps.now().date(), mode=plan_mode(plan))
         store.save_result(plan_id, lines, result)
     except Exception:
         store.release_run(plan_id)
         raise
+    if not result.shortlist and store.claim_refund(plan_id, MAX_REFUNDS):
+        # an empty search costs no run (up to MAX_REFUNDS per plan); the result is already saved, so a failure
+        # below cannot lose it. Re-save only to record that the run was given back, for the page note.
+        store.release_run(plan_id)
+        result.refunded = True
+        try:
+            store.save_result(plan_id, lines, result)
+        except Exception as exc:
+            log.warning("refund note not saved: %s", type(exc).__name__)
     return RedirectResponse("/p/%s/argue" % plan_id, status_code=303)
 
 
@@ -800,6 +812,9 @@ def _empty_view(result: RankResult, city: str = "") -> dict | None:
     if not result.shortlist and not result.excluded and result.away_dropped:
         return {"kind": "away", "city": city, "nearby": _nearby(city)}
     reason = result.emptied_by or ""
+    if not reason and result.partner_empty and not result.shortlist:
+        return {"kind": "budget_cap", "city": city, "cap": fmt(result.search_cap_minor),
+                "nearby": _nearby(city), "refunded": result.refunded}
     if reason == "budget":
         return {"kind": "budget", "cheapest": _cheapest(result)}
     if reason.startswith("hard_no:"):

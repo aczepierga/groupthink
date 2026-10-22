@@ -132,6 +132,20 @@ def test_release_run_gives_the_claim_back(be):
     assert s.argue_count(pid) == 0
 
 
+def test_claim_refund_caps(be):
+    s = be.store
+    pid = s.create_plan(plan())
+    assert [s.claim_refund(pid, 2) for _ in range(3)] == [True, True, False]
+    assert s.claim_refund(pid, 2) is False        # never released, stays spent
+    other = s.create_plan(plan())
+    assert s.claim_refund(other, 2) is True       # counted per plan
+
+
+def test_claim_refund_on_missing_plan_raises(be):
+    with pytest.raises(PlanNotFound):
+        be.store.claim_refund("gone0000gone0000", 2)
+
+
 def test_claim_run_on_missing_plan_raises(be):
     with pytest.raises(PlanNotFound):
         be.store.claim_run("gone0000gone0000", 2)

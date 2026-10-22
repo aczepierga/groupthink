@@ -45,11 +45,12 @@
         <button type="submit">Let them argue</button>
       </form>
       <p class="muted">Run {{ runs + 1 }} of {{ max_runs }}. The search takes a few seconds.</p>
+      {% if has_result %}<p class="muted">Running again starts a new debate and clears every vote cast so far.</p>{% endif %}
     {% endif %}
   {% else %}
     <p>The host starts the argument when the cards are in.</p>
   {% endif %}
-  {% if runs > 0 %}<p><a class="button secondary" href="/p/{{ plan_id }}/argue">See the argument</a></p>{% endif %}
+  {% if runs > 0 or has_result %}<p><a class="button secondary" href="/p/{{ plan_id }}/argue">See the argument</a></p>{% endif %}
 </section>
 {% include "_copy.html" %}
 {% endblock %}

@@ -56,6 +56,7 @@ class Store(Protocol):
     def argue_count(self, plan_id: str) -> int: ...
     def claim_run(self, plan_id: str, cap: int = 2) -> int | None: ...
     def release_run(self, plan_id: str) -> None: ...
+    def claim_refund(self, plan_id: str, cap: int) -> bool: ...
     def put_vote(self, plan_id: str, member_id: str, product_id: str) -> None: ...
     def votes(self, plan_id: str) -> dict[str, int]: ...
     def set_pick(self, plan_id: str, product_id: str) -> None: ...
@@ -82,6 +83,7 @@ CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, created_at TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS cards (plan_id TEXT, member_id TEXT, body TEXT NOT NULL, PRIMARY KEY (plan_id, member_id));
 CREATE TABLE IF NOT EXISTS results (plan_id TEXT PRIMARY KEY, body TEXT NOT NULL, argues INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS runs (plan_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS refunds (plan_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS votes (plan_id TEXT, member_id TEXT, product_id TEXT NOT NULL, PRIMARY KEY (plan_id, member_id));
 CREATE TABLE IF NOT EXISTS picks (plan_id TEXT PRIMARY KEY, product_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS carts (seq INTEGER PRIMARY KEY AUTOINCREMENT, plan_id TEXT NOT NULL, product_id TEXT,
@@ -91,7 +93,7 @@ CREATE TABLE IF NOT EXISTS accepted (plan_id TEXT, option_id TEXT, price INTEGER
 CREATE TABLE IF NOT EXISTS notcartable (product_id TEXT PRIMARY KEY, marked_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS adminfail (ip_hash TEXT, hour TEXT, n INTEGER NOT NULL, PRIMARY KEY (ip_hash, hour));
 """
-_CHILDREN = ("cards", "results", "runs", "votes", "picks", "carts", "cartcreates", "accepted")
+_CHILDREN = ("cards", "results", "runs", "refunds", "votes", "picks", "carts", "cartcreates", "accepted")
 
 
 class SqliteStore:
@@ -184,6 +186,15 @@ class SqliteStore:
         with self._lock:
             self._db.execute("UPDATE runs SET n=n-1 WHERE plan_id=? AND n>0", (plan_id,))
             self._db.commit()
+
+    def claim_refund(self, plan_id, cap):
+        """Atomically record one empty-search refund; False once `cap` are spent. Never released."""
+        self._require_plan(plan_id)
+        with self._lock:
+            self._db.execute("INSERT OR IGNORE INTO refunds VALUES (?,0)", (plan_id,))
+            cur = self._db.execute("UPDATE refunds SET n=n+1 WHERE plan_id=? AND n<?", (plan_id, cap))
+            self._db.commit()
+            return cur.rowcount == 1
 
     def put_vote(self, plan_id, member_id, product_id):
         self._require_plan(plan_id)
