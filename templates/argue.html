@@ -84,6 +84,8 @@
       <p><strong>Some 21+ offers were left out so the plan suits everyone.</strong> Nothing was relaxed.</p>
     {% elif empty.kind == "quantity" %}
       <p><strong>Every offer left cannot be bought in the quantity your group needs.</strong> Nothing was relaxed.</p>
+    {% elif empty.kind == "date" %}
+      <p><strong>Every offer left is for a different fixed date than your plan.</strong> Nothing was relaxed.</p>
     {% else %}
       <p><strong>No offers were found for this plan.</strong> Nothing was padded in.</p>
     {% endif %}
@@ -124,7 +126,7 @@
     <p class="price"><span class="now">{{ o.price }}</span>{% if o.original %} <s>{{ o.original }}</s>{% endif %} per voucher</p>
     {% if o.original_unknown %}<p class="muted">Original price: unknown</p>{% endif %}
     <p>{{ o.place }}</p>
-    <p>{{ o.quantity }} {{ o.party }}</p>
+    <p>{{ o.quantity }} {{ o.party }}{% if o.min_note %} {{ o.min_note }}{% endif %}</p>
     {% if o.facts %}<ul class="muted">{% for f in o.facts %}<li>{{ f }}</li>{% endfor %}</ul>{% endif %}
     <h4>Fine print</h4>
     {% if o.fine_print is none %}

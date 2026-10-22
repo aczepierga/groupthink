@@ -1517,3 +1517,39 @@ def test_deal_link_livingsocial_only():
                          None, None, Facts(), url)
     assert web.safe_deal_url(cand("https://www.groupon.com/deals/x")) is None
     assert web.safe_deal_url(cand("https://www.livingsocial.com/deals/x")) == "https://www.livingsocial.com/deals/x"
+
+
+# ---- title size, minimum vouchers, fixed dates -------------------------------------------
+
+def test_offer_copy_for_title_size_and_minimum():
+    big = p_hit("p1", "Swing Suite for 8", 3000)
+    mins = p_hit("p2", "Axe Throwing Hour", 2500)
+    mins["options"][0]["minUnits"] = 4
+    env = Env(ls=FakeLs(hits=[big, mins], agent=False))
+    pid, host, _ = group(env)
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "Voucher size: up to 8 people (from the offer title)." in t
+    assert "Buy 1 voucher for 3 people." in t
+    assert "may already cover more than one person" not in t.split("Axe Throwing Hour")[0].split("Swing Suite for 8")[-1]
+    assert "LivingSocial sells at least 4 vouchers for this option." in t
+
+
+def test_fixed_date_line_when_plan_date_is_vague():
+    env = Env(ls=FakeLs(hits=[p_hit("p1", "Oct 23rd Reggaeton Cruise", 3000)], agent=False))
+    host = env.browser()
+    pid = new_plan(host, group_size="2", date_text="this weekend")
+    card(host, pid, "Ann", "50")
+    card(env.browser(), pid, "Bo", "50")
+    argue(host, pid)
+    assert "This one is for a fixed date: Oct 23." in host.get(f"/p/{pid}/argue").text
+
+
+def test_date_emptied_list_has_its_own_copy():
+    env = Env(ls=FakeLs(hits=[p_hit("p1", "Oct 23rd Reggaeton Cruise", 3000),
+                              p_hit("p2", "November 1st Cruise", 3000)], agent=False))
+    pid, host, _ = group(env)          # the plan is for Sat Nov 8
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "Every offer left is for a different fixed date than your plan." in t
+    assert 'class="offer"' not in t

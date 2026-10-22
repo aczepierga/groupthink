@@ -6,6 +6,7 @@ agent offer is Task 5's job; ids differ between the two APIs). Inside a matched 
 option is attached to a Partner option by PRICE equality, never by option id, and only when exactly
 one agent option has that price.
 """
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
@@ -37,6 +38,7 @@ class Candidate:
     promo_code: str | None
     facts: Facts = field(default_factory=Facts)
     offer_url: str | None = None   # agent offerUrl (public deal page) on a strict match; validated at render
+    title_party: int | None = None   # people one voucher covers, read from the option title or title
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -46,6 +48,50 @@ class Candidate:
         d = dict(d)
         d["facts"] = Facts(**(d.get("facts") or {}))
         return cls(**d)
+
+
+_NUM_WORDS = {w: i for i, w in enumerate(
+    "two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+    "seventeen eighteen nineteen twenty".split(), start=2)}
+_NUM = r"(\d{1,3}|" + "|".join(_NUM_WORDS) + r")(?!\d)"
+_PEOPLE_RX = re.compile(r"(?<![\w$])(?:for|up to)\s+(?:up to\s+)?" + _NUM +
+                        r"\s+(?:people|persons|guests|players|adults|riders|diners)\b", re.IGNORECASE)
+_FOR_RX = re.compile(r"(?<![\w$])for\s+" + _NUM + r"(?=\s*(?:$|[(,)\-|]))", re.IGNORECASE)
+_FOR_NUMBER_RX = re.compile(r"(?<!\w)for\s+\$?(?:\d|" + "|".join(_NUM_WORDS) + r")", re.IGNORECASE)
+_MORE_SIZES_RX = re.compile(r"\s*(?:,\s*(?:or\s+|and\s+)?|\s+or\s+)(?:\d|" + "|".join(_NUM_WORDS) + r")\b",
+                            re.IGNORECASE)
+
+
+def _party_n(token: str) -> int | None:
+    n = int(token) if token.isdigit() else _NUM_WORDS.get(token.lower())
+    return n if n is not None and 2 <= n <= 20 else None
+
+
+def _party_in(text: str) -> tuple[bool, int | None]:
+    """(text names a people count, the count or None when it is ambiguous or out of range)."""
+    sizes: set[int] = set()
+    found = False
+    for rx in (_PEOPLE_RX, _FOR_RX):
+        for m in rx.finditer(text):
+            n = _party_n(m.group(1))
+            if n is None:
+                continue
+            found = True
+            if _MORE_SIZES_RX.match(text, m.end()):
+                return True, None
+            sizes.add(n)
+    return found, (next(iter(sizes)) if len(sizes) == 1 else None)
+
+
+def title_party(option_title: str, title: str) -> int | None:
+    """People one voucher covers, read from the option title first, then the title. A count that is not a
+    people count (hours, months, a price, a list of sizes) reads as unknown, never as a guess."""
+    found, n = _party_in(option_title or "")
+    if found:
+        return n
+    if _FOR_NUMBER_RX.search(option_title or ""):
+        return None
+    return _party_in(title or "")[1]
 
 
 def _minor(v) -> int | None:
@@ -114,5 +160,6 @@ def build_candidates(partner_hits: list[dict], agent_details: dict[str, dict],
                 promo_code=(a_opt or {}).get("promoCode"),
                 facts=extract_facts(fine_print),
                 offer_url=agent["offerUrl"] if agent and isinstance(agent.get("offerUrl"), str) else None,
+                title_party=title_party(opt.get("title") or "", hit.get("title") or ""),
             ))
     return out

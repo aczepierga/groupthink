@@ -27,7 +27,7 @@ from . import limits
 from .candidates import Candidate
 from .cart import CartBusy, make_carts
 from .debate import run_debate
-from .fit import Member, Ranked, RankResult, per_member_spend_minor, rank
+from .fit import Member, Ranked, RankResult, per_member_spend_minor, quantity_needed, rank
 from .kv import Kv, KvError
 from .ls_client import LsClient
 from .money import dollars_to_minor, fmt
@@ -577,7 +577,8 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
                       message="We could not reach LivingSocial just now. Nothing was changed and this did "
                               "not use up a run. Try again in a minute.")
     try:
-        result = rank(found.candidates, members, solo=plan_mode(plan) == "solo")
+        result = rank(found.candidates, members, solo=plan_mode(plan) == "solo",
+                      today=deps.now().date(), plan_date_text=plan.get("date_text", ""))
         result.adult_dropped = found.adult_dropped
         result.away_dropped = found.away_dropped
         result.partner_empty = found.partner_empty
@@ -647,6 +648,9 @@ def _date_text(value) -> str | None:
         return v[:40]
 
 
+_MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
 def _warning_lines(r: Ranked) -> list[str]:
     c, out = r.candidate, []
     for code in r.warnings:
@@ -662,6 +666,12 @@ def _warning_lines(r: Ranked) -> list[str]:
             out.append("Needs an appointment with the business after purchase.")
         elif code == "appointment_unknown":
             out.append("Appointment requirement: unknown.")
+        elif code.startswith("fixed_date:"):
+            try:
+                d = date.fromisoformat(code.split(":", 1)[1])
+            except ValueError:
+                continue
+            out.append("This one is for a fixed date: %s %d." % (_MONTH_ABBR[d.month - 1], d.day))
     return out
 
 
@@ -717,13 +727,18 @@ def _offer_view(r: Ranked, counts: dict, solo: bool = False, blocked: bool = Fal
         why.append("Matches something %d of %d members like." % (liked, len(r.verdicts)))
     if r.discount_pct:
         why.append("%d%% off the original price." % r.discount_pct)
-    if c.party_size is None or c.party_bound not in ("exactly", "up_to", "at_least"):
+    if c.party_size is None and c.title_party:
+        party = "Voucher size: up to %d people (from the offer title)." % c.title_party
+    elif c.party_size is None or c.party_bound not in ("exactly", "up_to", "at_least"):
         party = "Voucher size: unknown."
     else:
         party = "Each voucher covers %s %d %s." % (
             {"exactly": "exactly", "up_to": "up to", "at_least": "at least"}[c.party_bound], c.party_size,
             "person" if c.party_size == 1 else "people")
     place = c.place or "unknown"
+    needed = quantity_needed(group, c.party_size, c.party_bound, 1, c.title_party)
+    min_note = ("LivingSocial sells at least %d vouchers for this option." % c.min_units
+                if r.quantity > needed and c.min_units and c.min_units > needed else None)
     n_votes = counts.get(c.product_id, 0)
     return {
         "product_id": c.product_id, "blocked": blocked, "title": c.title, "option_title": c.option_title,
@@ -735,7 +750,7 @@ def _offer_view(r: Ranked, counts: dict, solo: bool = False, blocked: bool = Fal
                                                      "person" if group == 1 else "people"),
         "money": "%d voucher%s, %s total" % (r.quantity, "" if r.quantity == 1 else "s",
                                              fmt(r.quantity * c.price_minor, c.precision)),
-        "party": party, "fine_print": c.fine_print, "why": why, "warnings": _warning_lines(r),
+        "party": party, "min_note": min_note, "fine_print": c.fine_print, "why": why, "warnings": _warning_lines(r),
         "facts": _fact_lines(c), "deal_url": safe_deal_url(c),
         "promo": c.promo_code, "voucher_until": _date_text(c.voucher_expires),
         "votes": "%d vote%s" % (n_votes, "" if n_votes == 1 else "s"),
@@ -767,7 +782,7 @@ def _empty_view(result: RankResult, city: str = "") -> dict | None:
         return {"kind": "budget", "cheapest": _cheapest(result)}
     if reason.startswith("hard_no:"):
         return {"kind": "hard_no", "word": reason.split(":", 1)[1]}
-    if reason in ("kids_21", "quantity"):
+    if reason in ("kids_21", "quantity", "date"):
         return {"kind": reason}
     return {"kind": "none"}
 

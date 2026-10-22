@@ -2,7 +2,7 @@ import copy
 import json
 from pathlib import Path
 
-from groupthink.candidates import Candidate, build_candidates
+from groupthink.candidates import Candidate, build_candidates, title_party
 from groupthink.facts import Facts
 
 FIX = Path(__file__).parent / "fixtures"
@@ -165,3 +165,20 @@ def test_place_and_city_follow_the_plan_city():
     assert (c.place, c.city) == ("Near", "Chicago, IL")
     c = build_candidates([h], {}, "B")[0]           # no plan city: the first location, as before
     assert (c.place, c.city) == ("Far", "Denver")
+
+
+# --- voucher size from the title ----------------------------------------------------------
+
+def test_title_party_reads_people_counts():
+    assert title_party("", "Swing Suite for 8") == 8
+    assert title_party("Up to 4 Players Per Team", "Scavenger Hunt For Four Teams") == 4
+    assert title_party("", "Dinner for Two") == 2
+    assert title_party("", "$25 for 2 People") == 2
+
+
+def test_title_party_ignores_non_people_counts():
+    for text in ("2 for $30", "Up to 82% Off", "$20 for $40", "Monthly Unlimited Yoga for 3 Months",
+                 "Facial Package for 2 Hours", "Class Pack for 10 Classes", "Pass for 6 Weeks",
+                 "Wine Flight for 2 or 4", "Party for 40 People"):
+        assert title_party("", text) is None, text
+    assert title_party("Distillery Tour for 4 plus $10 token", "Distillery Tour for 2, 4, or 6") is None

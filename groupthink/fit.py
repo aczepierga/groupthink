@@ -7,8 +7,9 @@ Member text is untrusted: truncated, keyword-matched with escaped word-boundary 
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass
+from datetime import date
 
-from .candidates import Candidate
+from .candidates import Candidate, title_party  # noqa: F401  (title_party is part of this module's interface)
 
 NAME_MAX = 40
 TEXT_MAX = 280
@@ -101,7 +102,7 @@ class Ranked:
 class Excluded:
     product_id: str
     title: str
-    reason: str   # hard_no:<word> | kids_21 | quantity
+    reason: str   # hard_no:<word> | kids_21 | date | quantity
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -137,11 +138,60 @@ class RankResult:
                    away_dropped=d.get("away_dropped", 0), partner_empty=bool(d.get("partner_empty", False)))
 
 
+_MONTH_DAY_RX = re.compile(
+    r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|"
+    r"Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!\d)")
+_CUE_RX = re.compile(r"\b(to|through|thru|until|valid|and|or)\b|[-&]", re.IGNORECASE)
+_SECOND_DAY_RX = re.compile(r"\s*,\s*\d{1,2}(?!\d)")
+_MONTH_NUM = {m: i for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split(), start=1)}
+PAST_GRACE_DAYS = 60
+
+
+def _month_day(text: str, today: date) -> tuple[bool, str | None]:
+    """(text has a month-and-day, the ISO date when it names exactly one and nothing cues a range or choice)."""
+    matches = list(_MONTH_DAY_RX.finditer(text or ""))
+    if not matches:
+        return False, None
+    if len(matches) != 1 or _CUE_RX.search(text) or _SECOND_DAY_RX.match(text, matches[0].end()):
+        return True, None
+    month, day = _MONTH_NUM[matches[0].group(1)[:3].lower()], int(matches[0].group(2))
+    if not 1 <= day <= 31:
+        return True, None
+    for year in (today.year, today.year + 1):
+        try:
+            d = date(year, month, day)
+        except ValueError:
+            continue
+        if d >= today or (today - d).days <= PAST_GRACE_DAYS:
+            return True, d.isoformat()
+    return True, None
+
+
+def fixed_date(text: str, today: date) -> str | None:
+    """ISO date of the one event date named in the text, else None (ranges, choices and plain months are not dates)."""
+    return _month_day(text, today)[1]
+
+
+def parse_plan_date(text: str, today: date) -> str | None:
+    return _month_day(text, today)[1]
+
+
+def offer_fixed_date(c: Candidate, today: date) -> str | None:
+    """The offer's fixed date: read from the option title, or from the title when the option names no month-day."""
+    for text in (c.option_title, c.title):
+        found, iso = _month_day(text, today)
+        if found:
+            return iso
+    return None
+
+
 def quantity_needed(group_size: int, party_size: int | None, bound: str | None,
-                    min_units: int) -> int:
+                    min_units: int, title_party: int | None = None) -> int:
     group = max(group_size, 1)
     if bound == "exactly" and party_size and party_size > 0:
         qty = -(-group // party_size)
+    elif title_party and not party_size:
+        qty = -(-group // title_party)
     else:
         qty = group
     return max(qty, min_units or 1, 1)
@@ -168,23 +218,28 @@ def _discount_pct(c: Candidate) -> int | None:
     return None
 
 
-def _warnings(c: Candidate, any_kids: bool) -> list[str]:
+def _warnings(c: Candidate, any_kids: bool, fixed: str | None = None) -> list[str]:
     w: list[str] = []
     f = c.facts
     if f.limit_per_person is not None:
         w.append("limit_per_person")
-    if c.party_bound in ("up_to", "at_least") or c.party_size is None:
-        w.append("may_cover_more")
+    if c.title_party is None or c.party_size is not None:
+        if c.party_bound in ("up_to", "at_least") or c.party_size is None:
+            w.append("may_cover_more")
     if f.appointment is True:
         w.append("appointment")
     elif f.appointment is None:
         w.append("appointment_unknown")
     if any_kids and f.age_21 is None:
         w.append("age_unknown")
+    if fixed:
+        w.append("fixed_date:" + fixed)
     return w
 
 
-def rank(cands: list[Candidate], members: list[Member], solo: bool = False) -> RankResult:
+def rank(cands: list[Candidate], members: list[Member], solo: bool = False,
+         today: date | None = None, plan_date_text: str = "") -> RankResult:
+    plan_iso = parse_plan_date(plan_date_text, today) if today else None
     group = max(len(members), 1)
     any_kids = any(m.kids for m in members)
     hard_nos = [w for m in members for w in m.hard_nos if w.strip()]
@@ -194,7 +249,7 @@ def rank(cands: list[Candidate], members: list[Member], solo: bool = False) -> R
     titles: dict[str, str] = {}
     for c in cands:
         hay = _haystack(c)
-        qty = quantity_needed(len(members), c.party_size, c.party_bound, c.min_units)
+        qty = quantity_needed(len(members), c.party_size, c.party_bound, c.min_units, c.title_party)
         reason = None
         for w in hard_nos:
             if _word_in(w, hay):
@@ -202,6 +257,9 @@ def rank(cands: list[Candidate], members: list[Member], solo: bool = False) -> R
                 break
         if reason is None and any_kids and c.facts.age_21 is True:
             reason = "kids_21"
+        fixed = offer_fixed_date(c, today) if today else None
+        if reason is None and fixed and (fixed < today.isoformat() or (plan_iso and fixed != plan_iso)):
+            reason = "date"
         if reason is None and c.max_units is not None and c.max_units < qty:
             reason = "quantity"
         if reason is None and solo and qty > 1:
@@ -221,7 +279,7 @@ def rank(cands: list[Candidate], members: list[Member], solo: bool = False) -> R
         score = (10 * sum(v.fits_budget for v in verdicts)
                  + 2 * sum(len(v.likes_matched) for v in verdicts)
                  + 0.05 * (disc or 0))
-        r = Ranked(c, qty, verdicts, score, disc, _warnings(c, any_kids))
+        r = Ranked(c, qty, verdicts, score, disc, _warnings(c, any_kids, fixed if not plan_iso else None))
         survivors.append(((-score, spend, c.product_id, c.option_id), r))
 
     survivors.sort(key=lambda t: t[0])

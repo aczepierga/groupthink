@@ -1,7 +1,9 @@
+from datetime import date
+
 from groupthink.candidates import Candidate
 from groupthink.facts import Facts
-from groupthink.fit import (Excluded, Member, Ranked, RankResult, Verdict, per_member_spend_minor,
-                            quantity_needed, rank)
+from groupthink.fit import (Excluded, Member, Ranked, RankResult, Verdict, fixed_date, parse_plan_date,
+                            per_member_spend_minor, quantity_needed, rank)
 
 
 def cand(pid="p1", oid="o1", title="Thing", price=8000, original=None, party=2, bound="exactly",
@@ -263,3 +265,58 @@ def test_top_is_one_option_per_product_and_at_most_three():
     assert len(tops) == 3 and len(set(tops)) == 3
     shortlist_ids = [id(r) for r in res.shortlist]
     assert all(id(r) in shortlist_ids for r in res.top)
+
+
+# --- voucher size from the title, fixed dates ---------------------------------------------
+
+TODAY = date(2026, 10, 22)
+
+
+def test_quantity_uses_title_party_when_agent_size_missing():
+    assert quantity_needed(3, None, None, 1, title_party=8) == 1
+    assert quantity_needed(5, None, None, 1, title_party=4) == 2
+    assert quantity_needed(5, 2, "exactly", 1, title_party=8) == 3     # agent data wins
+    assert quantity_needed(3, None, None, 2, title_party=8) == 2       # min_units still applies
+
+
+def test_fixed_date_reads_one_event_date():
+    assert fixed_date("Oct 23rd Reggaeton Cruise", TODAY) == "2026-10-23"
+    assert fixed_date("Halloween Cruise November 1st", TODAY) == "2026-11-01"
+    assert fixed_date("Oct 19th Comedy Night", TODAY) == "2026-10-19"
+    assert fixed_date("Feb 2 Gala", TODAY) == "2027-02-02"
+
+
+def test_fixed_date_ignores_ranges_and_lowercase():
+    for text in ("General Admission (Valid Oct 8 - 31)", "Valid Nov 1 to Dec 31", "Open May 1st through Sept",
+                 "Groups of 8 may enjoy", "Pickleball Class", "Mar 2026 Pass", "Nov 7, 8 Show"):
+        assert fixed_date(text, TODAY) is None, text
+
+
+def test_parse_plan_date():
+    assert parse_plan_date("Sat Nov 14", TODAY) == "2026-11-14"
+    assert parse_plan_date("Sat Nov 7, evening", TODAY) == "2026-11-07"
+    for text in ("11/14", "this weekend", "Nov 14-16", "Nov 7 or 8"):
+        assert parse_plan_date(text, TODAY) is None, text
+
+
+def test_rank_excludes_wrong_and_past_dates():
+    cands = [cand(pid="a", title="Oct 23rd Cruise"), cand(pid="b", title="November 1st Cruise"),
+             cand(pid="c", title="Oct 19th Comedy"), cand(pid="d", title="Pottery")]
+    res = rank(cands, group(2), today=TODAY, plan_date_text="Sat Nov 14")
+    assert {e.product_id: e.reason for e in res.excluded} == {"a": "date", "b": "date", "c": "date"}
+    assert [r.candidate.product_id for r in res.shortlist] == ["d"]
+    res = rank(cands, group(2), today=TODAY, plan_date_text="this weekend")
+    assert {e.product_id: e.reason for e in res.excluded} == {"c": "date"}
+    kept = {r.candidate.product_id: r for r in res.shortlist}
+    assert "fixed_date:2026-10-23" in kept["a"].warnings
+    assert "fixed_date:2026-11-01" in kept["b"].warnings
+    assert not any(w.startswith("fixed_date") for w in kept["d"].warnings)
+    same = rank(cands[:1], group(2), today=TODAY, plan_date_text="Fri Oct 23")
+    assert same.shortlist and not any(w.startswith("fixed_date") for w in same.shortlist[0].warnings)
+
+
+def test_title_party_sets_quantity_and_drops_cover_more_warning():
+    c = cand(title="Swing Suite for 8", party=None, bound=None)
+    c.title_party = 8
+    r = rank([c], group(3)).shortlist[0]
+    assert r.quantity == 1 and "may_cover_more" not in r.warnings
