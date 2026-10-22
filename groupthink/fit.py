@@ -263,6 +263,26 @@ def _warnings(c: Candidate, any_kids: bool, fixed: str | None = None) -> list[st
     return w
 
 
+def _emptied_by(excluded: list[Excluded], members: list[Member]) -> str:
+    """The most common exclusion reason. Every hard_no:<word> counts as one `hard_no` bucket, so a few
+    different words are not outvoted by one bigger single reason; the bucket then names its most common word,
+    the first in member order on ties."""
+    counts = Counter("hard_no" if e.reason.startswith("hard_no:") else e.reason for e in excluded)
+    top = max(counts.values())
+    if counts.get("hard_no") == top:
+        words = Counter(e.reason for e in excluded if e.reason.startswith("hard_no:"))
+
+        def order(reason: str) -> int:
+            word = reason.split(":", 1)[1].strip().casefold()
+            for i, m in enumerate(members):
+                if any(w.strip().casefold() == word for w in m.hard_nos):
+                    return i
+            return len(members)
+        best = max(words.values())
+        return min((r for r, n in words.items() if n == best), key=order)
+    return counts.most_common(1)[0][0]
+
+
 def rank(cands: list[Candidate], members: list[Member], solo: bool = False,
          today: date | None = None, plan_date_text: str = "") -> RankResult:
     plan_iso = parse_plan_date(plan_date_text, today) if today else None
@@ -336,7 +356,7 @@ def rank(cands: list[Candidate], members: list[Member], solo: bool = False,
     emptied_by = None
     if not survivors:
         if excluded:
-            emptied_by = Counter(e.reason for e in excluded).most_common(1)[0][0]
+            emptied_by = _emptied_by(excluded, members)
     elif not top:
         emptied_by = "budget"
     out_pids = {e.product_id for e in excluded}

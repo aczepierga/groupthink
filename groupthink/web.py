@@ -848,12 +848,18 @@ def _nearby(city: str) -> list[str]:
 def _empty_view(result: RankResult, city: str = "") -> dict | None:
     if result.top:
         return None
+    view = _empty_kind(result, city)
+    view["refunded"] = result.refunded
+    return view
+
+
+def _empty_kind(result: RankResult, city: str) -> dict:
     if not result.shortlist and not result.excluded and result.away_dropped:
         return {"kind": "away", "city": city, "nearby": _nearby(city)}
     reason = result.emptied_by or ""
     if not reason and result.partner_empty and not result.shortlist:
         return {"kind": "budget_cap", "city": city, "cap": fmt(result.search_cap_minor),
-                "nearby": _nearby(city), "refunded": result.refunded}
+                "nearby": _nearby(city)}
     if reason == "budget":
         return {"kind": "budget", "cheapest": _cheapest(result)}
     if reason.startswith("hard_no:"):
@@ -866,8 +872,8 @@ def _empty_view(result: RankResult, city: str = "") -> dict | None:
 
 def _thin_view(result: RankResult, city: str) -> dict | None:
     products = len(result.shortlist) + len(result.excluded)
-    if products >= THIN_BELOW or (products == 0 and result.away_dropped):
-        return None   # the area-emptied callout speaks for itself
+    if products >= THIN_BELOW or (products == 0 and (result.away_dropped or result.partner_empty)):
+        return None   # the area-emptied and no-search-results callouts speak for themselves
     if products == 0:
         note = "Live search found no offers in %s." % city
     else:

@@ -48,7 +48,6 @@
       {% if empty.nearby %}Try a nearby city instead:
         {% for n in empty.nearby %}<a href="/?city={{ n|urlencode }}">{{ n }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
       {% endif %}</p>
-      {% if empty.refunded %}<p>This search did not use up a run.</p>{% endif %}
     {% elif solo and empty.kind == "budget" %}
       <p><strong>No offer fits your budget.</strong>
       {% if empty.cheapest %}The cheapest option is {{ empty.cheapest.spend }} ({{ empty.cheapest.title }}).{% endif %}</p>
@@ -104,6 +103,7 @@
     {% else %}
       <p><strong>No offers were found for this plan.</strong> Nothing was padded in.</p>
     {% endif %}
+    {% if empty.refunded %}<p>This search did not use up a run.</p>{% endif %}
     {% if runs < max_runs and host and solo %}<p class="muted">After a change, press "Start the fight" on <a href="/p/{{ plan_id }}/card">your card page</a> again (fight {{ runs + 1 }} of {{ max_runs }}).</p>
     {% elif runs < max_runs and host %}<p class="muted">After a change, press "Let them argue" on the plan page again (run {{ runs + 1 }} of {{ max_runs }}).</p>{% endif %}
   </div>
