@@ -118,19 +118,23 @@ class RankResult:
     excluded: list[Excluded]
     emptied_by: str | None
     adult_dropped: int = 0   # set by the /argue handler from the Scout result; rank() leaves 0
+    away_dropped: int = 0    # likewise: products with no location in the plan's area
+    partner_empty: bool = False   # likewise: the Partner search returned zero products
 
     def to_dict(self) -> dict:
         return {"shortlist": [r.to_dict() for r in self.shortlist],
                 "top": [r.to_dict() for r in self.top],
                 "excluded": [e.to_dict() for e in self.excluded],
-                "emptied_by": self.emptied_by, "adult_dropped": self.adult_dropped}
+                "emptied_by": self.emptied_by, "adult_dropped": self.adult_dropped,
+                "away_dropped": self.away_dropped, "partner_empty": self.partner_empty}
 
     @classmethod
     def from_dict(cls, d: dict) -> "RankResult":
         return cls(shortlist=[Ranked.from_dict(r) for r in d["shortlist"]],
                    top=[Ranked.from_dict(r) for r in d["top"]],
                    excluded=[Excluded.from_dict(e) for e in d["excluded"]],
-                   emptied_by=d["emptied_by"], adult_dropped=d.get("adult_dropped", 0))
+                   emptied_by=d["emptied_by"], adult_dropped=d.get("adult_dropped", 0),
+                   away_dropped=d.get("away_dropped", 0), partner_empty=bool(d.get("partner_empty", False)))
 
 
 def quantity_needed(group_size: int, party_size: int | None, bound: str | None,

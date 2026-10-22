@@ -9,6 +9,7 @@ one agent option has that price.
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+from .area import area_location
 from .facts import Facts, extract_facts
 
 
@@ -51,11 +52,13 @@ def _minor(v) -> int | None:
     return None if v is None else int(round(v))
 
 
-def _place_city(hit: dict) -> tuple[str, str]:
+def _place_city(hit: dict, plan_city: str = "") -> tuple[str, str]:
+    """Place and city shown: the first location in the plan's area (chains list far-away branches first);
+    with no plan city, or none in the area, the first location."""
     locs = hit.get("locations") or []
     if not locs:
         return "", ""
-    loc = locs[0]
+    loc = (area_location(plan_city, hit) if plan_city else None) or locs[0]
     return (loc.get("name") or loc.get("street") or ""), (loc.get("city") or "")
 
 
@@ -67,7 +70,7 @@ def _agent_option_for(retail_minor: int, agent_options: list[dict]) -> dict | No
 
 
 def build_candidates(partner_hits: list[dict], agent_details: dict[str, dict],
-                     path: Literal["A", "B"]) -> list[Candidate]:
+                     path: Literal["A", "B"], plan_city: str = "") -> list[Candidate]:
     out: list[Candidate] = []
     for hit in partner_hits:
         if hit.get("availabilityRequired") is not False:
@@ -76,7 +79,7 @@ def build_candidates(partner_hits: list[dict], agent_details: dict[str, dict],
             continue
         pid = hit["id"]
         agent = agent_details.get(pid) if path == "A" else None
-        place, city = _place_city(hit)
+        place, city = _place_city(hit, plan_city)
         fine_print = agent.get("finePrint") if agent else None
         for opt in hit.get("options") or []:
             if opt.get("active") is False:   # null = unknown = sellable

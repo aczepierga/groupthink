@@ -35,7 +35,12 @@
 
   {% if empty %}
   <div class="callout" role="status">
-    {% if solo and empty.kind == "budget" %}
+    {% if empty.kind == "away" %}
+      <p><strong>Live search found offers, but none in {{ empty.city }} or nearby right now.</strong>
+      {% if empty.nearby %}Try a nearby city instead:
+        {% for n in empty.nearby %}<a href="/?city={{ n|urlencode }}">{{ n }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
+      {% endif %}</p>
+    {% elif solo and empty.kind == "budget" %}
       <p><strong>No offer fits your budget.</strong>
       {% if empty.cheapest %}The cheapest option is {{ empty.cheapest.spend }} ({{ empty.cheapest.title }}).{% endif %}</p>
       {% if host %}

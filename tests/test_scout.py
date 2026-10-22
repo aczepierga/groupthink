@@ -1,8 +1,8 @@
 import pytest
 
 from groupthink.ls_client import LsApiError
-from groupthink.scout import (ADULT_TERMS, DETAIL_CAP, NEARBY, confirm_match, is_adult, match_agent,
-                              scout)
+from groupthink.scout import (ADULT_TERMS, DETAIL_CAP, NEARBY, SAME_AREA, _queries, city_key, confirm_match,
+                              in_area, is_adult, match_agent, scout)
 
 
 def hit(pid, title="Swedish Massage", city="Chicago", cats=("Day Spas",), prices=(4080,), **kw):
@@ -128,8 +128,8 @@ def test_thin_flag_under_5():
 
 
 def test_nearby_towns():
-    assert NEARBY == {"Chicago": ["Evanston", "Oak Park"], "Austin": ["Round Rock"],
-                      "New York": ["Brooklyn", "Jersey City"]}
+    assert NEARBY == {"Chicago": ["Naperville", "Schaumburg"], "Austin": ["San Marcos"],
+                      "New York": ["Newark", "Yonkers"]}
 
 
 # ---- adult filter ----------------------------------------------------
@@ -433,3 +433,75 @@ def test_scout_skips_not_cartable_ids():
     assert {x.product_id for x in r.candidates} == {"p1", "p3"}
     r = scout(c, "Chicago", "massage", 5000, 2, "B")
     assert {x.product_id for x in r.candidates} == {"p1", "p2", "p3"}
+
+
+# ---- area filter (D1) --------------------------------------------------
+
+def at(pid, *cities, title=None):
+    h = hit(pid, title=title or "Offer " + pid)
+    h["locations"] = [{"id": "l%d" % i, "name": "Spot %s %d" % (pid, i), "city": c, "state": "X"}
+                      for i, c in enumerate(cities)]
+    return h
+
+
+def test_offers_outside_the_area_are_dropped():
+    hits = [at("chi", "Chicago"), at("evn", "Evanston"), at("sf", "San Francisco"),
+            at("sa", "Santa Ana"), at("none")]
+    r = run(FakeClient(partner={"massage": hits}))
+    assert {c.product_id for c in r.candidates} == {"chi", "evn"}
+    assert r.away_dropped == 3
+    assert r.partner_empty is False
+
+
+def test_any_location_in_area_keeps_a_chain():
+    r = run(FakeClient(partner={"massage": [at("chain", "Denver", "Seattle", "Chicago")]}))
+    assert [c.product_id for c in r.candidates] == ["chain"]
+    assert r.candidates[0].city == "Chicago"
+    assert r.candidates[0].place == "Spot chain 2"
+    assert r.away_dropped == 0
+
+
+def test_city_key_normalizes():
+    assert city_key("CHICAGO") == city_key("Chicago, IL") == "chicago"
+    assert in_area("Chicago", "CHICAGO") and in_area("Chicago", "Chicago, IL")
+    assert not in_area("Chicago", "")
+
+
+def test_new_york_keeps_boroughs_and_aliases():
+    for ok in ("Brooklyn", "Queens", "New York City", "NYC"):
+        assert in_area("New York", ok), ok
+    assert not in_area("New York", "Boston")
+    hits = [at("b", "Brooklyn"), at("n", "NYC"), at("bos", "Boston")]
+    r = run(FakeClient(partner={"massage": hits}), city="New York")
+    assert {c.product_id for c in r.candidates} == {"b", "n"} and r.away_dropped == 1
+
+
+def test_other_city_keeps_exact_match_only():
+    r = run(FakeClient(partner={"massage": [at("den", "Denver"), at("bou", "Boulder")]}), city="Denver")
+    assert {c.product_id for c in r.candidates} == {"den"} and r.away_dropped == 1
+
+
+def test_near_towns_are_not_in_the_area():
+    for city, towns in NEARBY.items():
+        assert not any(in_area(city, t) for t in towns), city
+        assert not set(towns) & set(SAME_AREA.get(city, []))
+
+
+def test_likes_become_queries():
+    q = _queries("fun night out", ["food", "drinks", "games"])
+    assert q == ["fun night out", "food", "drinks", "things to do"]
+    assert _queries("", ["food", "Food", "drinks", "games"]) == ["food", "drinks", "things to do", "dinner"]
+    assert _queries("", ["x" * 50])[0] == "x" * 40
+    assert _queries("t", ["a", "b"])[-1] in ("things to do", "dinner", "activities")
+
+
+def test_scout_searches_the_likes():
+    c = FakeClient()
+    scout(c, "Chicago", "", 5000, 2, "B", likes=["bowling", "pizza", "karaoke"])
+    assert [q for q, _, _ in c.partner_calls][:3] == ["bowling", "pizza", "things to do"]
+
+
+def test_partner_empty_flag():
+    assert run(FakeClient()).partner_empty is True
+    r = run(FakeClient(partner={"massage": [at("sf", "San Francisco")]}))
+    assert r.partner_empty is False and r.candidates == [] and r.away_dropped == 1

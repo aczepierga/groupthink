@@ -11,6 +11,7 @@ import re
 import time
 from dataclasses import dataclass
 
+from .area import CITY_ALIASES, SAME_AREA, area_location, city_key, in_area  # noqa: F401
 from .candidates import Candidate, build_candidates
 from .ls_client import LsApiError
 
@@ -27,8 +28,10 @@ BASE_QUERIES = ["things to do", "dinner", "activities"]
 ADULT_TERMS = ["adults only", "adult night", "adults night", "adult entertainment", "adult store",
                "adult shop", "adult toys", "thc", "cannabis", "dispensary", "strip club", "sex",
                "erotic", "hookah", "21+ night"]
-NEARBY = {"Chicago": ["Evanston", "Oak Park"], "Austin": ["Round Rock"],
-          "New York": ["Brooklyn", "Jersey City"]}
+LIKE_QUERIES = 2           # likes that become their own Partner query
+LIKE_MAX_CHARS = 40
+NEARBY = {"Chicago": ["Naperville", "Schaumburg"], "Austin": ["San Marcos"],
+          "New York": ["Newark", "Yonkers"]}   # towns outside SAME_AREA: a different search, not a repeat
 
 # Whole words only, with an optional plural "s". Bare "adult" is not a term ("Adult Pottery Class" is a
 # legitimate grown-up class), and "cbd" is not a term (CBD massage deals are legitimate). "NY Strip
@@ -44,6 +47,8 @@ class ScoutResult:
     queries_tried: list[str]
     thin: bool
     adult_dropped: int = 0
+    away_dropped: int = 0          # products with no location in the plan's area
+    partner_empty: bool = False    # Partner search returned zero products before any filter
 
 
 def is_adult(hit: dict) -> bool:
@@ -88,12 +93,28 @@ def confirm_match(hit: dict, detail: dict) -> bool:
     return bool(wanted) and all(p in agent_prices for p in wanted)
 
 
-def _queries(theme: str) -> list[str]:
+def _queries(theme: str, likes=()) -> list[str]:
+    """Theme, then the first LIKE_QUERIES distinct likes, then the base queries up to MAX_QUERIES (always
+    at least one base query)."""
     out, seen = [], set()
-    for q in [(theme or "").strip()] + BASE_QUERIES:
+
+    def add(q):
         if q and q.casefold() not in seen:
             seen.add(q.casefold())
             out.append(q)
+            return True
+        return False
+
+    add((theme or "").strip())
+    taken = 0
+    for like in likes:
+        if taken >= LIKE_QUERIES:
+            break
+        if add((like or "").strip()[:LIKE_MAX_CHARS].strip()):
+            taken += 1
+    out = out[:MAX_QUERIES - 1]
+    for q in BASE_QUERIES:
+        add(q)
     return out[:MAX_QUERIES]
 
 
@@ -102,7 +123,8 @@ def _sellable(hit: dict) -> bool:
 
 
 def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, path: str,
-          budget_s: float = BUDGET_S, clock=time.monotonic, skip_ids: set[str] = frozenset()) -> ScoutResult:
+          budget_s: float = BUDGET_S, clock=time.monotonic, skip_ids: set[str] = frozenset(),
+          likes=()) -> ScoutResult:
     """Fetch and build candidates inside a wall-clock budget (default 12 s, i.e. 8 s for the last agent
     read to start and 10 s for the last query). Past a cutoff nothing new starts and what was gathered is
     returned: later offers simply stay Partner-only, and fewer queries just mean fewer products.
@@ -117,7 +139,7 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
     max_price = max_price if max_price > 0 else None
 
     tried, unique = [], {}
-    for q in _queries(theme):
+    for q in _queries(theme, likes):
         if not query_ok():
             log.info("scout budget: no new query after %d tried", len(tried))
             break
@@ -136,8 +158,10 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
             break
 
     pool = [h for h in unique.values() if h["id"] not in skip_ids]
-    kept = [h for h in pool if not is_adult(h)]
-    adult_dropped = len(pool) - len(kept)
+    unadult = [h for h in pool if not is_adult(h)]
+    adult_dropped = len(pool) - len(unadult)
+    kept = [h for h in unadult if area_location(city, h) is not None]   # before any agent read
+    away_dropped = len(unadult) - len(kept)
 
     agent_details: dict[str, dict] = {}
     if path == "A" and any(_sellable(h) for h in kept):
@@ -165,9 +189,10 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
             if isinstance(detail, dict) and confirm_match(h, detail):
                 agent_details[h["id"]] = dict(detail, permalink=detail.get("permalink") or s["permalink"])
 
-    candidates = build_candidates(kept, agent_details, path)
+    candidates = build_candidates(kept, agent_details, path, plan_city=city)
     thin = len({c.product_id for c in candidates}) < THIN_BELOW
-    return ScoutResult(candidates=candidates, queries_tried=tried, thin=thin, adult_dropped=adult_dropped)
+    return ScoutResult(candidates=candidates, queries_tried=tried, thin=thin, adult_dropped=adult_dropped,
+                       away_dropped=away_dropped, partner_empty=not unique)
 
 
 def _agent_summaries(client, queries: list[str], city: str, may_start=lambda: True) -> list[dict]:

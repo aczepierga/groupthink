@@ -31,6 +31,7 @@ from .fit import Member, Ranked, RankResult, per_member_spend_minor, rank
 from .kv import Kv, KvError
 from .ls_client import LsClient
 from .money import dollars_to_minor, fmt
+from .area import in_area
 from .scout import NEARBY, THIN_BELOW, scout
 from .store import TTL_SECONDS, PlanNotFound, SqliteStore, hash_ip
 from .store_durable import DurableStore
@@ -567,7 +568,8 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
         return render(request, "limit.html", 429, kind="runs")
     try:
         found = scout(deps.ls, plan["city"], plan.get("theme", ""), max(m.max_budget_minor for m in members),
-                      len(members), SCOUT_PATH, skip_ids=skip)
+                      len(members), SCOUT_PATH, skip_ids=skip,
+                      likes=[l for m in members for l in m.likes])
     except Exception as exc:   # LsApiError, a missing key, a network failure: say none of it
         store.release_run(plan_id)
         log.warning("scout failed: %s status=%s", type(exc).__name__, getattr(exc, "status", None))
@@ -577,6 +579,8 @@ def run_argue(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     try:
         result = rank(found.candidates, members, solo=plan_mode(plan) == "solo")
         result.adult_dropped = found.adult_dropped
+        result.away_dropped = found.away_dropped
+        result.partner_empty = found.partner_empty
         lines = run_debate(result, members, _seed(plan_id, run - 1), deps.now().date(), mode=plan_mode(plan))
         store.save_result(plan_id, lines, result)
     except Exception:
@@ -749,9 +753,15 @@ def _cheapest(result: RankResult) -> dict | None:
     return {"title": best[1].candidate.title, "spend": fmt(best[0], best[1].candidate.precision)}
 
 
-def _empty_view(result: RankResult) -> dict | None:
+def _nearby(city: str) -> list[str]:
+    return [n for n in NEARBY.get(city, []) if not in_area(city, n)]
+
+
+def _empty_view(result: RankResult, city: str = "") -> dict | None:
     if result.top:
         return None
+    if not result.shortlist and not result.excluded and result.away_dropped:
+        return {"kind": "away", "city": city, "nearby": _nearby(city)}
     reason = result.emptied_by or ""
     if reason == "budget":
         return {"kind": "budget", "cheapest": _cheapest(result)}
@@ -764,13 +774,13 @@ def _empty_view(result: RankResult) -> dict | None:
 
 def _thin_view(result: RankResult, city: str) -> dict | None:
     products = len(result.shortlist) + len(result.excluded)
-    if products >= THIN_BELOW:
-        return None
+    if products >= THIN_BELOW or (products == 0 and result.away_dropped):
+        return None   # the area-emptied callout speaks for itself
     if products == 0:
         note = "Live search found no offers in %s." % city
     else:
         note = "Live search found only %d offer%s in %s." % (products, "" if products == 1 else "s", city)
-    return {"note": note, "nearby": NEARBY.get(city, [])}
+    return {"note": note, "nearby": _nearby(city)}
 
 
 def _round_numbers(lines) -> list[int]:
@@ -826,7 +836,7 @@ def argue_page(plan_id: str, request: Request, deps: Deps = Depends(get_deps)):
     winner = next((o for o in offers if o["product_id"] == tal["winner"]), None)
     host = is_host(request, plan_id, plan)
     me = current_member(request, plan_id, cards)
-    empty = _empty_view(result)
+    empty = _empty_view(result, plan["city"])
     owns_hard_no = bool(empty and empty["kind"] == "hard_no" and me and _has_word(me, empty["word"]))
     return render(
         request, "argue.html", plan_id=plan_id, plan=plan,

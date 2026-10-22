@@ -11,7 +11,7 @@ from groupthink import limits
 from groupthink import web
 from groupthink.kv import KvError
 from groupthink.ls_client import LsApiError, LsClient
-from groupthink.scout import NEARBY
+from groupthink.scout import NEARBY, SAME_AREA
 from groupthink.store import PlanNotFound, SqliteStore
 from groupthink.web import client_ip
 from groupthink.web_skeleton import create_app
@@ -608,9 +608,9 @@ def test_thin_results_suggest_nearby_city():
     pid, host, _ = group(env)
     argue(host, pid)
     t = host.get(f"/p/{pid}/argue").text
-    assert "Evanston" in t and "Oak Park" in t
+    assert "Naperville" in t and "Schaumburg" in t
     assert "only 1 offer" in t.lower()
-    assert set(NEARBY["Chicago"]) <= {"Evanston", "Oak Park"}
+    assert set(NEARBY["Chicago"]) <= {"Naperville", "Schaumburg"}
 
 
 def test_no_candidates_at_all_says_so_and_never_pads():
@@ -619,7 +619,45 @@ def test_no_candidates_at_all_says_so_and_never_pads():
     argue(host, pid)
     t = host.get(f"/p/{pid}/argue").text
     assert 'class="offer"' not in t
-    assert "Evanston" in t and REQUIRED_COPY in t
+    assert "Naperville" in t and REQUIRED_COPY in t
+
+
+def test_argue_passes_likes_to_the_search():
+    ls = FakeLs()
+    env = Env(ls=ls)
+    pid, host, _ = group(env, likes="bowling, pizza")
+    argue(host, pid)
+    queries = [q for kind, q, _ in ls.calls if kind == "partner"]
+    assert queries[:2] == ["bowling", "pizza"]
+
+
+def test_area_emptied_search_says_so():
+    hits = [p_hit("p%d" % i, "Thing %d" % i, 3000, city="Denver") for i in range(3)]
+    env = Env(ls=FakeLs(hits=hits))
+    pid, host, _ = group(env)
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "Live search found offers, but none in Chicago or nearby right now." in t
+    assert 'class="offer"' not in t
+    assert env.store.get_result(pid)[1].away_dropped == 3
+
+
+def test_partner_empty_is_stored_on_the_result():
+    env = Env(ls=FakeLs(hits=[]))
+    pid, host, _ = group(env)
+    argue(host, pid)
+    r = env.store.get_result(pid)[1]
+    assert r.partner_empty is True and r.away_dropped == 0
+
+
+def test_nearby_suggestion_skips_towns_already_included():
+    for city, towns in NEARBY.items():
+        assert not set(towns) & set(SAME_AREA.get(city, []))
+    env = Env(ls=FakeLs(hits=[p_hit("p1", "Pottery Wheel Night", 3000)]))
+    pid, host, _ = group(env)
+    argue(host, pid)
+    t = host.get(f"/p/{pid}/argue").text
+    assert "Evanston" not in t and "Oak Park" not in t
 
 
 # ---- votes and picks ---------------------------------------------------------------------------

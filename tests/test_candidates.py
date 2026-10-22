@@ -156,3 +156,12 @@ def test_hostile_text_passes_through_unchanged():
     h["title"] = "<script>alert(1)</script> " + "x" * 2000
     c = build_candidates([h], {}, "B")[0]
     assert c.title.startswith("<script>") and len(c.title) > 2000
+
+
+def test_place_and_city_follow_the_plan_city():
+    h = copy.deepcopy(HITS[0])
+    h["locations"] = [{"name": "Far", "city": "Denver"}, {"name": "Near", "city": "Chicago, IL"}]
+    c = build_candidates([h], {}, "B", plan_city="Chicago")[0]
+    assert (c.place, c.city) == ("Near", "Chicago, IL")
+    c = build_candidates([h], {}, "B")[0]           # no plan city: the first location, as before
+    assert (c.place, c.city) == ("Far", "Denver")
