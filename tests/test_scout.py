@@ -505,3 +505,27 @@ def test_partner_empty_flag():
     assert run(FakeClient()).partner_empty is True
     r = run(FakeClient(partner={"massage": [at("sf", "San Francisco")]}))
     assert r.partner_empty is False and r.candidates == [] and r.away_dropped == 1
+
+
+# ---- agent pairing for chains (fix round 1) ----------------------------
+
+def test_chain_pairs_with_an_in_area_agent_summary():
+    h = at("chain", "Denver", "Chicago")
+    assert match_agent(h, [summary("s1", title="Offer chain")], plan_city="Chicago") is not None
+    assert match_agent(h, [summary("s1", title="Offer chain")]) is not None   # Chicago is one of its locations
+    assert match_agent(h, [summary("s1", title="Offer chain", city="Boston")], plan_city="Chicago") is None
+
+
+def test_city_with_state_pairs_with_plain_summary():
+    h = at("x", "Chicago, IL")
+    assert match_agent(h, [summary("s1", title="Offer x", city="Chicago")], plan_city="Chicago") is not None
+
+
+def test_chain_gets_agent_details_in_the_flow():
+    h = at("chain", "Denver", "Chicago")
+    c = FakeClient(partner={"massage": [h]}, agent={"massage": [summary("s1", title="Offer chain")]},
+                   offers={"pl-s1": detail("s1")})
+    r = run(c, path="A")
+    assert c.offer_calls == ["pl-s1"]
+    assert r.candidates[0].fine_print == ["Appointment required."]
+    assert r.candidates[0].city == "Chicago"

@@ -11,7 +11,7 @@ import re
 import time
 from dataclasses import dataclass
 
-from .area import CITY_ALIASES, SAME_AREA, area_location, city_key, in_area  # noqa: F401
+from .area import CITY_ALIASES, SAME_AREA, area_keys, area_location, city_key, in_area  # noqa: F401
 from .candidates import Candidate, build_candidates
 from .ls_client import LsApiError
 
@@ -61,20 +61,24 @@ def normalize_title(s: str | None) -> str:
     return _SPACE_RE.sub(" ", _PUNCT_RE.sub("", (s or "").casefold())).strip()
 
 
-def _first_city(hit: dict) -> str:
-    locs = hit.get("locations") or []
-    return ((locs[0].get("city") or "") if locs else "").casefold().strip()
+def _hit_city_keys(hit: dict, plan_city: str = "") -> set[str]:
+    """City keys an agent summary may carry for this hit: every location city, plus the plan's area."""
+    keys = {city_key(l.get("city") or "") for l in (hit.get("locations") or [])}
+    if plan_city:
+        keys |= area_keys(plan_city)
+    keys.discard("")
+    return keys
 
 
-def match_agent(hit: dict, summaries: list[dict]) -> dict | None:
-    """The one agent summary whose normalized title equals the Partner title and whose city equals the
-    Partner hit's first location city. No match, or more than one distinct match, gives None."""
-    title, city = normalize_title(hit.get("title")), _first_city(hit)
-    if not title or not city:
+def match_agent(hit: dict, summaries: list[dict], plan_city: str = "") -> dict | None:
+    """The one agent summary whose normalized title equals the Partner title and whose city key is one of
+    the hit's location cities or in the plan's area. No match, or more than one distinct match, gives None."""
+    title, cities = normalize_title(hit.get("title")), _hit_city_keys(hit, plan_city)
+    if not title or not cities:
         return None
     found = {}
     for s in summaries:
-        if normalize_title(s.get("title")) == title and (s.get("city") or "").casefold().strip() == city:
+        if normalize_title(s.get("title")) == title and city_key(s.get("city") or "") in cities:
             found[s.get("id") or s.get("permalink")] = s
     return next(iter(found.values())) if len(found) == 1 else None
 
@@ -175,7 +179,7 @@ def scout(client, city: str, theme: str, max_cap_minor: int, group_size: int, pa
                 break
             if not _sellable(h):
                 continue
-            s = match_agent(h, summaries)
+            s = match_agent(h, summaries, plan_city=city)
             if s is None or not s.get("permalink"):
                 continue
             fetched += 1
